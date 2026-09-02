@@ -304,6 +304,58 @@ def test_events_include_secondary_entity() -> None:
     assert events.json()["data"][0]["secondary_entity"]["type"] == "vpc"
 
 
+def test_domain_and_record_lifecycle() -> None:
+    domain = client.post(
+        "/v4/domains",
+        headers=AUTH,
+        json={
+            "domain": "example.test",
+            "type": "master",
+            "soa_email": "dns@example.test",
+            "tags": ["public"],
+        },
+    )
+    assert domain.status_code == 200
+    domain_id = domain.json()["id"]
+
+    record = client.post(
+        f"/v4/domains/{domain_id}/records",
+        headers=AUTH,
+        json={"type": "A", "name": "app", "target": "192.0.2.10", "ttl_sec": 300},
+    )
+    assert record.status_code == 200
+    record_id = record.json()["id"]
+
+    updated_domain = client.put(
+        f"/v4/domains/{domain_id}",
+        headers=AUTH,
+        json={"description": "Primary zone"},
+    )
+    assert updated_domain.status_code == 200
+    assert updated_domain.json()["description"] == "Primary zone"
+
+    updated_record = client.put(
+        f"/v4/domains/{domain_id}/records/{record_id}",
+        headers=AUTH,
+        json={"target": "192.0.2.20"},
+    )
+    assert updated_record.status_code == 200
+    assert updated_record.json()["target"] == "192.0.2.20"
+
+    records = client.get(f"/v4/domains/{domain_id}/records", headers=AUTH)
+    assert records.status_code == 200
+    assert len(records.json()) == 1
+
+    events = client.get(
+        "/v4/account/events",
+        headers=AUTH,
+        params={"+filter": json.dumps({"action": "domain_record_create"})},
+    )
+    assert events.status_code == 200
+    assert events.json()["results"] == 1
+    assert events.json()["data"][0]["secondary_entity"]["type"] == "domain"
+
+
 def test_store_persistence(tmp_path: Path) -> None:
     state_file = tmp_path / "state.json"
     store.configure(str(state_file))

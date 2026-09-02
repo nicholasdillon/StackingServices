@@ -103,6 +103,8 @@ class ResourceStore:
     vpcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     nodebalancers: dict[int, dict[str, Any]] = field(default_factory=dict)
     firewalls: dict[int, dict[str, Any]] = field(default_factory=dict)
+    domains: dict[int, dict[str, Any]] = field(default_factory=dict)
+    domain_records: dict[int, dict[str, Any]] = field(default_factory=dict)
     events: dict[int, dict[str, Any]] = field(default_factory=dict)
     buckets: dict[str, dict[str, Any]] = field(default_factory=dict)
     next_instance_id: count = field(default_factory=lambda: count(1000))
@@ -113,6 +115,8 @@ class ResourceStore:
     next_subnet_id: count = field(default_factory=lambda: count(3500))
     next_nodebalancer_id: count = field(default_factory=lambda: count(4000))
     next_firewall_id: count = field(default_factory=lambda: count(5000))
+    next_domain_id: count = field(default_factory=lambda: count(6000))
+    next_domain_record_id: count = field(default_factory=lambda: count(7000))
     next_event_id: count = field(default_factory=lambda: count(9000))
 
     def reset(self) -> None:
@@ -123,6 +127,8 @@ class ResourceStore:
         self.vpcs.clear()
         self.nodebalancers.clear()
         self.firewalls.clear()
+        self.domains.clear()
+        self.domain_records.clear()
         self.events.clear()
         self.buckets.clear()
         self.next_instance_id = count(1000)
@@ -133,6 +139,8 @@ class ResourceStore:
         self.next_subnet_id = count(3500)
         self.next_nodebalancer_id = count(4000)
         self.next_firewall_id = count(5000)
+        self.next_domain_id = count(6000)
+        self.next_domain_record_id = count(7000)
         self.next_event_id = count(9000)
 
     def configure(self, state_path: str | None) -> None:
@@ -150,6 +158,8 @@ class ResourceStore:
         self.vpcs = {int(key): value for key, value in data.get("vpcs", {}).items()}
         self.nodebalancers = {int(key): value for key, value in data.get("nodebalancers", {}).items()}
         self.firewalls = {int(key): value for key, value in data.get("firewalls", {}).items()}
+        self.domains = {int(key): value for key, value in data.get("domains", {}).items()}
+        self.domain_records = {int(key): value for key, value in data.get("domain_records", {}).items()}
         self.events = {int(key): value for key, value in data.get("events", {}).items()}
         self.buckets = data.get("buckets", {})
         self.next_instance_id = count(data.get("next_instance_id", 1000))
@@ -160,6 +170,8 @@ class ResourceStore:
         self.next_subnet_id = count(data.get("next_subnet_id", 3500))
         self.next_nodebalancer_id = count(data.get("next_nodebalancer_id", 4000))
         self.next_firewall_id = count(data.get("next_firewall_id", 5000))
+        self.next_domain_id = count(data.get("next_domain_id", 6000))
+        self.next_domain_record_id = count(data.get("next_domain_record_id", 7000))
         self.next_event_id = count(data.get("next_event_id", 9000))
 
     def save(self) -> None:
@@ -177,6 +189,8 @@ class ResourceStore:
                     "vpcs": self.vpcs,
                     "nodebalancers": self.nodebalancers,
                     "firewalls": self.firewalls,
+                    "domains": self.domains,
+                    "domain_records": self.domain_records,
                     "events": self.events,
                     "buckets": self.buckets,
                     "next_instance_id": self.next_counter_value("next_instance_id"),
@@ -187,6 +201,8 @@ class ResourceStore:
                     "next_subnet_id": self.next_counter_value("next_subnet_id"),
                     "next_nodebalancer_id": self.next_counter_value("next_nodebalancer_id"),
                     "next_firewall_id": self.next_counter_value("next_firewall_id"),
+                    "next_domain_id": self.next_counter_value("next_domain_id"),
+                    "next_domain_record_id": self.next_counter_value("next_domain_record_id"),
                     "next_event_id": self.next_counter_value("next_event_id"),
                 },
                 indent=2,
@@ -491,6 +507,70 @@ class ResourceStore:
         self.persist()
         return clone(bucket)
 
+    def create_domain(self, payload: dict[str, Any]) -> dict[str, Any]:
+        domain_id = next(self.next_domain_id)
+        domain = {
+            "id": domain_id,
+            "domain": payload["domain"],
+            "type": payload.get("type", "master"),
+            "group": payload.get("group", ""),
+            "status": "active",
+            "description": payload.get("description", ""),
+            "soa_email": payload.get("soa_email", "admin@example.test"),
+            "retry_sec": payload.get("retry_sec", 300),
+            "master_ips": payload.get("master_ips", []),
+            "axfr_ips": payload.get("axfr_ips", []),
+            "tags": payload.get("tags", []),
+            "created": NOW,
+            "updated": NOW,
+        }
+        self.domains[domain_id] = domain
+        self.record_event("domain_create", self.entity_ref("domain", domain_id, domain["domain"], f"/v4/domains/{domain_id}"))
+        self.persist()
+        return clone(domain)
+
+    def update_domain(self, domain_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        domain = self.domains[domain_id]
+        domain.update(updates)
+        domain["updated"] = NOW
+        self.record_event("domain_update", self.entity_ref("domain", domain_id, domain["domain"], f"/v4/domains/{domain_id}"))
+        self.persist()
+        return clone(domain)
+
+    def create_domain_record(self, domain_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        record_id = next(self.next_domain_record_id)
+        record = {
+            "id": record_id,
+            "domain_id": domain_id,
+            "type": payload["type"],
+            "name": payload.get("name", ""),
+            "target": payload["target"],
+            "priority": payload.get("priority", 0),
+            "weight": payload.get("weight", 0),
+            "port": payload.get("port", 0),
+            "service": payload.get("service", ""),
+            "protocol": payload.get("protocol", ""),
+            "ttl_sec": payload.get("ttl_sec", 300),
+            "tag": payload.get("tag", ""),
+            "created": NOW,
+            "updated": NOW,
+        }
+        self.domain_records[record_id] = record
+        self.record_event("domain_record_create", self.entity_ref("domain_record", record_id, record["name"] or record["type"], f"/v4/domains/{domain_id}/records/{record_id}"), self.entity_ref("domain", domain_id, self.domains[domain_id]["domain"], f"/v4/domains/{domain_id}"))
+        self.persist()
+        return clone(record)
+
+    def list_domain_records(self, domain_id: int) -> list[dict[str, Any]]:
+        return clone([record for record in self.domain_records.values() if record["domain_id"] == domain_id])
+
+    def update_domain_record(self, record_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        record = self.domain_records[record_id]
+        record.update(updates)
+        record["updated"] = NOW
+        self.record_event("domain_record_update", self.entity_ref("domain_record", record_id, record["name"] or record["type"], f"/v4/domains/{record['domain_id']}/records/{record_id}"))
+        self.persist()
+        return clone(record)
+
     def create_event(self, payload: dict[str, Any]) -> None:
         event_id = next(self.next_event_id)
         self.events[event_id] = {
@@ -557,6 +637,19 @@ class ResourceStore:
         firewall = self.firewalls[firewall_id]
         del self.firewalls[firewall_id]
         self.record_event("firewall_delete", self.entity_ref("firewall", firewall_id, firewall["label"], f"/v4/networking/firewalls/{firewall_id}"))
+        self.persist()
+
+    def delete_domain(self, domain_id: int) -> None:
+        domain = self.domains[domain_id]
+        self.domain_records = {record_id: record for record_id, record in self.domain_records.items() if record["domain_id"] != domain_id}
+        del self.domains[domain_id]
+        self.record_event("domain_delete", self.entity_ref("domain", domain_id, domain["domain"], f"/v4/domains/{domain_id}"))
+        self.persist()
+
+    def delete_domain_record(self, record_id: int) -> None:
+        record = self.domain_records[record_id]
+        del self.domain_records[record_id]
+        self.record_event("domain_record_delete", self.entity_ref("domain_record", record_id, record["name"] or record["type"], f"/v4/domains/{record['domain_id']}/records/{record_id}"))
         self.persist()
 
     def delete_bucket(self, key: str) -> None:

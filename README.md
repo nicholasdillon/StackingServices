@@ -11,6 +11,8 @@ It is intentionally narrower than MiniStack's AWS coverage. This MVP focuses on 
 - `networking/firewalls`
 - `linode/instances/{id}/disks`
 - `linode/instances/{id}/configs`
+- `domains`
+- `domains/{id}/records`
 - `object-storage/buckets`
 - catalog endpoints such as `regions`, `types`, and `images`
 
@@ -31,6 +33,7 @@ Optional persistence is available through `MININODE_STATE_PATH`.
 - Nested VPC subnet endpoints and basic firewall resources
 - Instance disk and config resources
 - Account event history for control-plane operations
+- Domain and DNS record resources
 
 ## Quick Start
 
@@ -156,6 +159,24 @@ Inspect control-plane events:
 ```bash
 curl http://127.0.0.1:8000/v4/account/events \
   -H "Authorization: Bearer $LINODE_TOKEN"
+```
+
+Create a domain:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/domains \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"domain":"example.test","type":"master","soa_email":"dns@example.test"}'
+```
+
+Create a DNS record:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/domains/6000/records \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"A","name":"app","target":"192.0.2.10"}'
 ```
 
 Add a subnet to an existing VPC:

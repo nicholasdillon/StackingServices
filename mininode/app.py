@@ -173,6 +173,53 @@ class ConfigUpdate(BaseModel):
     virt_mode: str | None = None
 
 
+class DomainCreate(BaseModel):
+    domain: str = Field(min_length=1)
+    type: str = "master"
+    group: str | None = None
+    description: str | None = None
+    soa_email: str | None = None
+    retry_sec: int | None = Field(default=None, ge=1)
+    master_ips: list[str] = Field(default_factory=list)
+    axfr_ips: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class DomainUpdate(BaseModel):
+    group: str | None = None
+    description: str | None = None
+    soa_email: str | None = None
+    retry_sec: int | None = Field(default=None, ge=1)
+    master_ips: list[str] | None = None
+    axfr_ips: list[str] | None = None
+    tags: list[str] | None = None
+
+
+class DomainRecordCreate(BaseModel):
+    type: str
+    target: str
+    name: str | None = None
+    priority: int | None = None
+    weight: int | None = None
+    port: int | None = None
+    service: str | None = None
+    protocol: str | None = None
+    ttl_sec: int | None = Field(default=None, ge=1)
+    tag: str | None = None
+
+
+class DomainRecordUpdate(BaseModel):
+    target: str | None = None
+    name: str | None = None
+    priority: int | None = None
+    weight: int | None = None
+    port: int | None = None
+    service: str | None = None
+    protocol: str | None = None
+    ttl_sec: int | None = Field(default=None, ge=1)
+    tag: str | None = None
+
+
 def parse_filter(filter_value: str | None) -> dict[str, Any]:
     if not filter_value:
         return {}
@@ -290,6 +337,21 @@ def get_config_or_404(instance_id: int, config_id: int) -> dict[str, Any]:
     return config
 
 
+def get_domain_or_404(domain_id: int) -> dict[str, Any]:
+    domain = store.domains.get(domain_id)
+    if not domain:
+        error_response("Domain not found.", code=status.HTTP_404_NOT_FOUND)
+    return domain
+
+
+def get_domain_record_or_404(domain_id: int, record_id: int) -> dict[str, Any]:
+    get_domain_or_404(domain_id)
+    record = store.domain_records.get(record_id)
+    if not record or record["domain_id"] != domain_id:
+        error_response("Domain record not found.", code=status.HTTP_404_NOT_FOUND)
+    return record
+
+
 def get_subnet_or_404(vpc_id: int, subnet_id: int) -> dict[str, Any]:
     get_vpc_or_404(vpc_id)
     try:
@@ -327,6 +389,8 @@ async def health() -> dict[str, Any]:
             "vpcs": len(store.vpcs),
             "nodebalancers": len(store.nodebalancers),
             "firewalls": len(store.firewalls),
+            "domains": len(store.domains),
+            "domain_records": len(store.domain_records),
             "events": len(store.events),
             "buckets": len(store.buckets),
         },
@@ -744,6 +808,72 @@ async def delete_firewall(firewall_id: int, _: str = Depends(require_bearer_toke
     get_firewall_or_404(firewall_id)
     store.delete_firewall(firewall_id)
     return {"deleted": str(firewall_id)}
+
+
+@app.get("/v4/domains")
+async def list_domains(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
+    _: str = Depends(require_bearer_token),
+) -> dict[str, Any]:
+    items = apply_order(apply_filter(list(store.domains.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
+
+
+@app.post("/v4/domains", status_code=status.HTTP_200_OK)
+async def create_domain(payload: DomainCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return store.create_domain(payload.model_dump(exclude_none=True))
+
+
+@app.get("/v4/domains/{domain_id}")
+async def get_domain(domain_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_domain_or_404(domain_id)
+
+
+@app.put("/v4/domains/{domain_id}")
+async def update_domain(domain_id: int, payload: DomainUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_domain_or_404(domain_id)
+    return store.update_domain(domain_id, payload.model_dump(exclude_none=True))
+
+
+@app.delete("/v4/domains/{domain_id}", status_code=status.HTTP_200_OK)
+async def delete_domain(domain_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_domain_or_404(domain_id)
+    store.delete_domain(domain_id)
+    return {"deleted": str(domain_id)}
+
+
+@app.get("/v4/domains/{domain_id}/records")
+async def list_domain_records(domain_id: int, _: str = Depends(require_bearer_token)) -> list[dict[str, Any]]:
+    get_domain_or_404(domain_id)
+    return store.list_domain_records(domain_id)
+
+
+@app.post("/v4/domains/{domain_id}/records", status_code=status.HTTP_200_OK)
+async def create_domain_record(domain_id: int, payload: DomainRecordCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_domain_or_404(domain_id)
+    return store.create_domain_record(domain_id, payload.model_dump(exclude_none=True))
+
+
+@app.get("/v4/domains/{domain_id}/records/{record_id}")
+async def get_domain_record(domain_id: int, record_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_domain_record_or_404(domain_id, record_id)
+
+
+@app.put("/v4/domains/{domain_id}/records/{record_id}")
+async def update_domain_record(domain_id: int, record_id: int, payload: DomainRecordUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_domain_record_or_404(domain_id, record_id)
+    return store.update_domain_record(record_id, payload.model_dump(exclude_none=True))
+
+
+@app.delete("/v4/domains/{domain_id}/records/{record_id}", status_code=status.HTTP_200_OK)
+async def delete_domain_record(domain_id: int, record_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_domain_record_or_404(domain_id, record_id)
+    store.delete_domain_record(record_id)
+    return {"deleted": str(record_id)}
 
 
 @app.get("/v4/object-storage/buckets")
