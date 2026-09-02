@@ -1,10 +1,21 @@
+import json
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 from mininode.app import app
+from mininode.state import store
 
 
 client = TestClient(app)
 AUTH = {"Authorization": "Bearer test-token"}
+
+
+@pytest.fixture(autouse=True)
+def reset_store() -> None:
+    store.configure(None)
+    store.reset()
 
 
 def test_health_and_reset() -> None:
@@ -49,6 +60,15 @@ def test_instance_lifecycle() -> None:
     reboot = client.post(f"/v4/linode/instances/{instance['id']}/reboot", headers=AUTH)
     assert reboot.status_code == 200
     assert reboot.json()["status"] == "running"
+
+    update = client.put(
+        f"/v4/linode/instances/{instance['id']}",
+        headers=AUTH,
+        json={"label": "web-1-renamed", "tags": ["frontend"]},
+    )
+    assert update.status_code == 200
+    assert update.json()["label"] == "web-1-renamed"
+    assert update.json()["tags"] == ["frontend"]
 
 
 def test_volume_attach() -> None:
@@ -99,3 +119,64 @@ def test_vpc_and_bucket_creation() -> None:
     )
     assert bucket.status_code == 200
     assert bucket.json()["hostname"] == "artifacts.us-east-1.linodeobjects.com"
+
+
+def test_filter_and_ordering() -> None:
+    client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "z-last",
+            "region": "us-east",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+        },
+    )
+    client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "a-first",
+            "region": "eu-west",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+        },
+    )
+
+    response = client.get(
+        "/v4/linode/instances",
+        headers=AUTH,
+        params={"+filter": json.dumps({"region": "eu-west"}), "+order_by": "label", "+order": "asc"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["results"] == 1
+    assert body["data"][0]["label"] == "a-first"
+
+
+def test_store_persistence(tmp_path: Path) -> None:
+    state_file = tmp_path / "state.json"
+    store.configure(str(state_file))
+    store.reset()
+
+    created = client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "persisted-1",
+            "region": "us-east",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+        },
+    )
+    assert created.status_code == 200
+    assert state_file.exists()
+
+    store.reset()
+    assert store.instances == {}
+
+    store.configure(str(state_file))
+    store.load()
+    assert len(store.instances) == 1
+    restored = next(iter(store.instances.values()))
+    assert restored["label"] == "persisted-1"

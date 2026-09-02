@@ -30,7 +30,11 @@ async def require_bearer_token(authorization: str | None = Header(default=None))
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    store.reset()
+    store.configure(os.getenv("MININODE_STATE_PATH"))
+    if store.state_path:
+        store.load()
+    else:
+        store.reset()
     yield
 
 
@@ -90,6 +94,60 @@ class BucketCreate(BaseModel):
     label: str = Field(min_length=3)
     cluster: str
     region: str
+
+
+class InstanceUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    group: str | None = None
+    tags: list[str] | None = None
+
+
+class VolumeUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    tags: list[str] | None = None
+
+
+class VpcUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+    subnets: list[VpcSubnet] | None = None
+
+
+class NodeBalancerUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    client_conn_throttle: int | None = Field(default=None, ge=0)
+    tags: list[str] | None = None
+
+
+def parse_filter(filter_value: str | None) -> dict[str, Any]:
+    if not filter_value:
+        return {}
+    try:
+        parsed = json.loads(filter_value)
+    except json.JSONDecodeError:
+        error_response("Invalid +filter JSON.", field="+filter")
+    if not isinstance(parsed, dict):
+        error_response("+filter must be a JSON object.", field="+filter")
+    return parsed
+
+
+def apply_filter(items: list[dict[str, Any]], filter_value: str | None) -> list[dict[str, Any]]:
+    filters = parse_filter(filter_value)
+    if not filters:
+        return items
+
+    filtered: list[dict[str, Any]] = []
+    for item in items:
+        if all(item.get(key) == value for key, value in filters.items()):
+            filtered.append(item)
+    return filtered
+
+
+def apply_order(items: list[dict[str, Any]], order_by: str | None, order: str) -> list[dict[str, Any]]:
+    if not order_by:
+        return items
+    reverse = order.lower() == "desc"
+    return sorted(items, key=lambda item: (item.get(order_by) is None, item.get(order_by)), reverse=reverse)
 
 
 def validate_instance_create(payload: InstanceCreate) -> None:
@@ -183,6 +241,7 @@ async def health() -> dict[str, Any]:
 @app.post("/_mininode/reset")
 async def reset() -> dict[str, str]:
     store.reset()
+    store.save()
     return {"status": "reset"}
 
 
@@ -215,45 +274,65 @@ async def account(_: str = Depends(require_bearer_token)) -> dict[str, Any]:
 async def list_regions(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
     _: str = Depends(require_bearer_token),
 ) -> dict[str, Any]:
-    return paginate(store.list_regions(), page, page_size)
+    items = apply_order(apply_filter(store.list_regions(), filter_value), order_by, order)
+    return paginate(items, page, page_size)
 
 
 @app.get("/v4/linode/types")
 async def list_types(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
     _: str = Depends(require_bearer_token),
 ) -> dict[str, Any]:
-    return paginate(store.list_types(), page, page_size)
+    items = apply_order(apply_filter(store.list_types(), filter_value), order_by, order)
+    return paginate(items, page, page_size)
 
 
 @app.get("/v4/images")
 async def list_images(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
     _: str = Depends(require_bearer_token),
 ) -> dict[str, Any]:
-    return paginate(store.list_images(), page, page_size)
+    items = apply_order(apply_filter(store.list_images(), filter_value), order_by, order)
+    return paginate(items, page, page_size)
 
 
 @app.get("/v4/object-storage/clusters")
 async def list_clusters(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
     _: str = Depends(require_bearer_token),
 ) -> dict[str, Any]:
-    return paginate(store.list_clusters(), page, page_size)
+    items = apply_order(apply_filter(store.list_clusters(), filter_value), order_by, order)
+    return paginate(items, page, page_size)
 
 
 @app.get("/v4/linode/instances")
 async def list_instances(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
     _: str = Depends(require_bearer_token),
 ) -> dict[str, Any]:
-    return paginate(list(store.instances.values()), page, page_size)
+    items = apply_order(apply_filter(list(store.instances.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
 
 
 @app.post("/v4/linode/instances", status_code=status.HTTP_200_OK)
@@ -267,44 +346,52 @@ async def get_instance(instance_id: int, _: str = Depends(require_bearer_token))
     return get_instance_or_404(instance_id)
 
 
+@app.put("/v4/linode/instances/{instance_id}")
+async def update_instance(instance_id: int, payload: InstanceUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_instance_or_404(instance_id)
+    updates = payload.model_dump(exclude_none=True)
+    return store.update_instance(instance_id, updates)
+
+
 @app.delete("/v4/linode/instances/{instance_id}", status_code=status.HTTP_200_OK)
 async def delete_instance(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
     get_instance_or_404(instance_id)
     for volume in store.volumes.values():
         if volume.get("linode_id") == instance_id:
             volume["linode_id"] = None
-    del store.instances[instance_id]
+    store.delete_instance(instance_id)
     return {"deleted": str(instance_id)}
 
 
 @app.post("/v4/linode/instances/{instance_id}/boot")
 async def boot_instance(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
-    instance = get_instance_or_404(instance_id)
-    instance["status"] = "running"
-    return instance
+    get_instance_or_404(instance_id)
+    return store.update_instance(instance_id, {"status": "running"})
 
 
 @app.post("/v4/linode/instances/{instance_id}/shutdown")
 async def shutdown_instance(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
-    instance = get_instance_or_404(instance_id)
-    instance["status"] = "offline"
-    return instance
+    get_instance_or_404(instance_id)
+    return store.update_instance(instance_id, {"status": "offline"})
 
 
 @app.post("/v4/linode/instances/{instance_id}/reboot")
 async def reboot_instance(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
-    instance = get_instance_or_404(instance_id)
-    instance["status"] = "running"
-    return instance
+    get_instance_or_404(instance_id)
+    return store.update_instance(instance_id, {"status": "running"})
 
 
 @app.get("/v4/volumes")
 async def list_volumes(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
     _: str = Depends(require_bearer_token),
 ) -> dict[str, Any]:
-    return paginate(list(store.volumes.values()), page, page_size)
+    items = apply_order(apply_filter(list(store.volumes.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
 
 
 @app.post("/v4/volumes", status_code=status.HTTP_200_OK)
@@ -318,26 +405,31 @@ async def get_volume(volume_id: int, _: str = Depends(require_bearer_token)) -> 
     return get_volume_or_404(volume_id)
 
 
+@app.put("/v4/volumes/{volume_id}")
+async def update_volume(volume_id: int, payload: VolumeUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_volume_or_404(volume_id)
+    updates = payload.model_dump(exclude_none=True)
+    return store.update_volume(volume_id, updates)
+
+
 @app.post("/v4/volumes/{volume_id}/attach")
 async def attach_volume(volume_id: int, payload: VolumeAttach, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
-    volume = get_volume_or_404(volume_id)
+    get_volume_or_404(volume_id)
     if payload.linode_id not in store.instances:
         error_response("Linode not found.", field="linode_id", code=status.HTTP_404_NOT_FOUND)
-    volume["linode_id"] = payload.linode_id
-    return volume
+    return store.update_volume(volume_id, {"linode_id": payload.linode_id})
 
 
 @app.post("/v4/volumes/{volume_id}/detach")
 async def detach_volume(volume_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
-    volume = get_volume_or_404(volume_id)
-    volume["linode_id"] = None
-    return volume
+    get_volume_or_404(volume_id)
+    return store.update_volume(volume_id, {"linode_id": None})
 
 
 @app.delete("/v4/volumes/{volume_id}", status_code=status.HTTP_200_OK)
 async def delete_volume(volume_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
     get_volume_or_404(volume_id)
-    del store.volumes[volume_id]
+    store.delete_volume(volume_id)
     return {"deleted": str(volume_id)}
 
 
@@ -345,9 +437,13 @@ async def delete_volume(volume_id: int, _: str = Depends(require_bearer_token)) 
 async def list_vpcs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
     _: str = Depends(require_bearer_token),
 ) -> dict[str, Any]:
-    return paginate(list(store.vpcs.values()), page, page_size)
+    items = apply_order(apply_filter(list(store.vpcs.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
 
 
 @app.post("/v4/vpcs", status_code=status.HTTP_200_OK)
@@ -361,10 +457,17 @@ async def get_vpc(vpc_id: int, _: str = Depends(require_bearer_token)) -> dict[s
     return get_vpc_or_404(vpc_id)
 
 
+@app.put("/v4/vpcs/{vpc_id}")
+async def update_vpc(vpc_id: int, payload: VpcUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_vpc_or_404(vpc_id)
+    updates = payload.model_dump(exclude_none=True)
+    return store.update_vpc(vpc_id, updates)
+
+
 @app.delete("/v4/vpcs/{vpc_id}", status_code=status.HTTP_200_OK)
 async def delete_vpc(vpc_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
     get_vpc_or_404(vpc_id)
-    del store.vpcs[vpc_id]
+    store.delete_vpc(vpc_id)
     return {"deleted": str(vpc_id)}
 
 
@@ -372,9 +475,13 @@ async def delete_vpc(vpc_id: int, _: str = Depends(require_bearer_token)) -> dic
 async def list_nodebalancers(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
     _: str = Depends(require_bearer_token),
 ) -> dict[str, Any]:
-    return paginate(list(store.nodebalancers.values()), page, page_size)
+    items = apply_order(apply_filter(list(store.nodebalancers.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
 
 
 @app.post("/v4/nodebalancers", status_code=status.HTTP_200_OK)
@@ -388,10 +495,17 @@ async def get_nodebalancer(nodebalancer_id: int, _: str = Depends(require_bearer
     return get_nodebalancer_or_404(nodebalancer_id)
 
 
+@app.put("/v4/nodebalancers/{nodebalancer_id}")
+async def update_nodebalancer(nodebalancer_id: int, payload: NodeBalancerUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_nodebalancer_or_404(nodebalancer_id)
+    updates = payload.model_dump(exclude_none=True)
+    return store.update_nodebalancer(nodebalancer_id, updates)
+
+
 @app.delete("/v4/nodebalancers/{nodebalancer_id}", status_code=status.HTTP_200_OK)
 async def delete_nodebalancer(nodebalancer_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
     get_nodebalancer_or_404(nodebalancer_id)
-    del store.nodebalancers[nodebalancer_id]
+    store.delete_nodebalancer(nodebalancer_id)
     return {"deleted": str(nodebalancer_id)}
 
 
@@ -399,9 +513,13 @@ async def delete_nodebalancer(nodebalancer_id: int, _: str = Depends(require_bea
 async def list_buckets(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
     _: str = Depends(require_bearer_token),
 ) -> dict[str, Any]:
-    return paginate(list(store.buckets.values()), page, page_size)
+    items = apply_order(apply_filter(list(store.buckets.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
 
 
 @app.post("/v4/object-storage/buckets", status_code=status.HTTP_200_OK)
@@ -424,7 +542,7 @@ async def delete_bucket(cluster: str, bucket_label: str, _: str = Depends(requir
     key = store.bucket_key(cluster, bucket_label)
     if key not in store.buckets:
         error_response("Bucket not found.", code=status.HTTP_404_NOT_FOUND)
-    del store.buckets[key]
+    store.delete_bucket(key)
     return {"deleted": bucket_label}
 
 

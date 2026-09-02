@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from copy import deepcopy
 from dataclasses import dataclass, field
 from itertools import count
@@ -91,6 +93,7 @@ def clone(value: Any) -> Any:
 
 @dataclass
 class ResourceStore:
+    state_path: Path | None = None
     instances: dict[int, dict[str, Any]] = field(default_factory=dict)
     volumes: dict[int, dict[str, Any]] = field(default_factory=dict)
     vpcs: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -111,6 +114,56 @@ class ResourceStore:
         self.next_volume_id = count(2000)
         self.next_vpc_id = count(3000)
         self.next_nodebalancer_id = count(4000)
+
+    def configure(self, state_path: str | None) -> None:
+        self.state_path = Path(state_path) if state_path else None
+
+    def load(self) -> None:
+        if not self.state_path or not self.state_path.exists():
+            return
+
+        data = json.loads(self.state_path.read_text())
+        self.instances = {int(key): value for key, value in data.get("instances", {}).items()}
+        self.volumes = {int(key): value for key, value in data.get("volumes", {}).items()}
+        self.vpcs = {int(key): value for key, value in data.get("vpcs", {}).items()}
+        self.nodebalancers = {int(key): value for key, value in data.get("nodebalancers", {}).items()}
+        self.buckets = data.get("buckets", {})
+        self.next_instance_id = count(data.get("next_instance_id", 1000))
+        self.next_volume_id = count(data.get("next_volume_id", 2000))
+        self.next_vpc_id = count(data.get("next_vpc_id", 3000))
+        self.next_nodebalancer_id = count(data.get("next_nodebalancer_id", 4000))
+
+    def save(self) -> None:
+        if not self.state_path:
+            return
+
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.state_path.write_text(
+            json.dumps(
+                {
+                    "instances": self.instances,
+                    "volumes": self.volumes,
+                    "vpcs": self.vpcs,
+                    "nodebalancers": self.nodebalancers,
+                    "buckets": self.buckets,
+                    "next_instance_id": self.next_counter_value("next_instance_id"),
+                    "next_volume_id": self.next_counter_value("next_volume_id"),
+                    "next_vpc_id": self.next_counter_value("next_vpc_id"),
+                    "next_nodebalancer_id": self.next_counter_value("next_nodebalancer_id"),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+
+    def next_counter_value(self, attr_name: str) -> int:
+        counter = getattr(self, attr_name)
+        value = next(counter)
+        setattr(self, attr_name, count(value))
+        return value
+
+    def persist(self) -> None:
+        self.save()
 
     def list_regions(self) -> list[dict[str, Any]]:
         return clone(REGIONS)
@@ -155,6 +208,13 @@ class ResourceStore:
             "backups": {"enabled": False, "available": False, "schedule": None, "last_successful": None},
         }
         self.instances[instance_id] = instance
+        self.persist()
+        return clone(instance)
+
+    def update_instance(self, instance_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        instance = self.instances[instance_id]
+        instance.update(updates)
+        self.persist()
         return clone(instance)
 
     def create_volume(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -170,6 +230,13 @@ class ResourceStore:
             "filesystem_path": f"/dev/disk/by-id/scsi-0Linode_Volume_{volume_id}",
         }
         self.volumes[volume_id] = volume
+        self.persist()
+        return clone(volume)
+
+    def update_volume(self, volume_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        volume = self.volumes[volume_id]
+        volume.update(updates)
+        self.persist()
         return clone(volume)
 
     def create_vpc(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -184,6 +251,13 @@ class ResourceStore:
             "updated": "2026-09-02T00:00:00",
         }
         self.vpcs[vpc_id] = vpc
+        self.persist()
+        return clone(vpc)
+
+    def update_vpc(self, vpc_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        vpc = self.vpcs[vpc_id]
+        vpc.update(updates)
+        self.persist()
         return clone(vpc)
 
     def create_nodebalancer(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -199,6 +273,13 @@ class ResourceStore:
             "transfer": {"total": 0, "out": 0, "in": 0},
         }
         self.nodebalancers[nodebalancer_id] = nodebalancer
+        self.persist()
+        return clone(nodebalancer)
+
+    def update_nodebalancer(self, nodebalancer_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        nodebalancer = self.nodebalancers[nodebalancer_id]
+        nodebalancer.update(updates)
+        self.persist()
         return clone(nodebalancer)
 
     def create_bucket(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -213,7 +294,28 @@ class ResourceStore:
             "size": 0,
         }
         self.buckets[key] = bucket
+        self.persist()
         return clone(bucket)
+
+    def delete_instance(self, instance_id: int) -> None:
+        del self.instances[instance_id]
+        self.persist()
+
+    def delete_volume(self, volume_id: int) -> None:
+        del self.volumes[volume_id]
+        self.persist()
+
+    def delete_vpc(self, vpc_id: int) -> None:
+        del self.vpcs[vpc_id]
+        self.persist()
+
+    def delete_nodebalancer(self, nodebalancer_id: int) -> None:
+        del self.nodebalancers[nodebalancer_id]
+        self.persist()
+
+    def delete_bucket(self, key: str) -> None:
+        del self.buckets[key]
+        self.persist()
 
     @staticmethod
     def bucket_key(cluster: str, label: str) -> str:

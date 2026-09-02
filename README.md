@@ -13,6 +13,8 @@ It is intentionally narrower than MiniStack's AWS coverage. This MVP focuses on 
 
 Everything runs behind one local HTTP endpoint with simple in-memory state.
 
+Optional persistence is available through `MININODE_STATE_PATH`.
+
 ## Features
 
 - Linode v4-style REST paths
@@ -20,6 +22,9 @@ Everything runs behind one local HTTP endpoint with simple in-memory state.
 - Linode-like paginated list responses: `page`, `pages`, `results`, `data`
 - Internal test helpers for `health` and `reset`
 - Docker-friendly single-process runtime
+- Optional JSON persistence across restarts
+- Basic Linode-style `+filter`, `+order_by`, and `+order` support on list endpoints
+- `PUT` update endpoints for core mutable resources
 
 ## Quick Start
 
@@ -33,6 +38,12 @@ mininode
 ```
 
 The API will listen on `http://127.0.0.1:8000` by default.
+
+Persist state locally:
+
+```bash
+MININODE_STATE_PATH=./data/state.json mininode
+```
 
 ### Docker
 
@@ -100,6 +111,22 @@ Reset emulator state:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/_mininode/reset
+```
+
+Filter instances by region:
+
+```bash
+curl "http://127.0.0.1:8000/v4/linode/instances?%2Bfilter=%7B%22region%22%3A%22us-east%22%7D" \
+  -H "Authorization: Bearer $LINODE_TOKEN"
+```
+
+Update an instance label:
+
+```bash
+curl -X PUT http://127.0.0.1:8000/v4/linode/instances/1000 \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"web-1-renamed","tags":["frontend"]}'
 ```
 
 Health check:
