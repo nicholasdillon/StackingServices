@@ -269,6 +269,51 @@ class StackScriptUpdate(BaseModel):
     user_defined_fields: list[dict[str, Any]] | None = None
 
 
+class NodeBalancerConfigCreate(BaseModel):
+    port: int = Field(ge=1, le=65535)
+    protocol: str | None = None
+    proxy_protocol: str | None = None
+    check: str | None = None
+    check_interval: int | None = Field(default=None, ge=1)
+    check_timeout: int | None = Field(default=None, ge=1)
+    check_attempts: int | None = Field(default=None, ge=1)
+    algorithm: str | None = None
+    stickiness: str | None = None
+    cipher_suite: str | None = None
+    ssl_commonname: str | None = None
+    ssl_fingerprint: str | None = None
+
+
+class NodeBalancerConfigUpdate(BaseModel):
+    protocol: str | None = None
+    proxy_protocol: str | None = None
+    check: str | None = None
+    check_interval: int | None = Field(default=None, ge=1)
+    check_timeout: int | None = Field(default=None, ge=1)
+    check_attempts: int | None = Field(default=None, ge=1)
+    algorithm: str | None = None
+    stickiness: str | None = None
+    cipher_suite: str | None = None
+    ssl_commonname: str | None = None
+    ssl_fingerprint: str | None = None
+
+
+class NodeBalancerNodeCreate(BaseModel):
+    label: str = Field(min_length=1)
+    address: str = Field(min_length=1)
+    weight: int | None = Field(default=None, ge=1)
+    mode: str | None = None
+    status: str | None = None
+
+
+class NodeBalancerNodeUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    address: str | None = None
+    weight: int | None = Field(default=None, ge=1)
+    mode: str | None = None
+    status: str | None = None
+
+
 def parse_filter(filter_value: str | None) -> dict[str, Any]:
     if not filter_value:
         return {}
@@ -420,6 +465,22 @@ def get_stackscript_or_404(stackscript_id: int) -> dict[str, Any]:
     if not stackscript:
         error_response("StackScript not found.", code=status.HTTP_404_NOT_FOUND)
     return stackscript
+
+
+def get_nodebalancer_config_or_404(nodebalancer_id: int, config_id: int) -> dict[str, Any]:
+    get_nodebalancer_or_404(nodebalancer_id)
+    try:
+        return store.get_nodebalancer_config(nodebalancer_id, config_id)
+    except KeyError:
+        error_response("NodeBalancer config not found.", code=status.HTTP_404_NOT_FOUND)
+
+
+def get_nodebalancer_node_or_404(nodebalancer_id: int, config_id: int, node_id: int) -> dict[str, Any]:
+    get_nodebalancer_config_or_404(nodebalancer_id, config_id)
+    try:
+        return store.get_nodebalancer_node(nodebalancer_id, config_id, node_id)
+    except KeyError:
+        error_response("NodeBalancer node not found.", code=status.HTTP_404_NOT_FOUND)
 
 
 def validate_database_create(payload: DatabaseCreate) -> None:
@@ -867,6 +928,65 @@ async def delete_nodebalancer(nodebalancer_id: int, _: str = Depends(require_bea
     get_nodebalancer_or_404(nodebalancer_id)
     store.delete_nodebalancer(nodebalancer_id)
     return {"deleted": str(nodebalancer_id)}
+
+
+@app.get("/v4/nodebalancers/{nodebalancer_id}/configs")
+async def list_nodebalancer_configs(nodebalancer_id: int, _: str = Depends(require_bearer_token)) -> list[dict[str, Any]]:
+    get_nodebalancer_or_404(nodebalancer_id)
+    return store.list_nodebalancer_configs(nodebalancer_id)
+
+
+@app.post("/v4/nodebalancers/{nodebalancer_id}/configs", status_code=status.HTTP_200_OK)
+async def create_nodebalancer_config(nodebalancer_id: int, payload: NodeBalancerConfigCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_nodebalancer_or_404(nodebalancer_id)
+    return store.create_nodebalancer_config(nodebalancer_id, payload.model_dump(exclude_none=True))
+
+
+@app.get("/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}")
+async def get_nodebalancer_config(nodebalancer_id: int, config_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_nodebalancer_config_or_404(nodebalancer_id, config_id)
+
+
+@app.put("/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}")
+async def update_nodebalancer_config(nodebalancer_id: int, config_id: int, payload: NodeBalancerConfigUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_nodebalancer_config_or_404(nodebalancer_id, config_id)
+    return store.update_nodebalancer_config(nodebalancer_id, config_id, payload.model_dump(exclude_none=True))
+
+
+@app.delete("/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}", status_code=status.HTTP_200_OK)
+async def delete_nodebalancer_config(nodebalancer_id: int, config_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_nodebalancer_config_or_404(nodebalancer_id, config_id)
+    store.delete_nodebalancer_config(nodebalancer_id, config_id)
+    return {"deleted": str(config_id)}
+
+
+@app.get("/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes")
+async def list_nodebalancer_nodes(nodebalancer_id: int, config_id: int, _: str = Depends(require_bearer_token)) -> list[dict[str, Any]]:
+    return get_nodebalancer_config_or_404(nodebalancer_id, config_id).get("nodes", [])
+
+
+@app.post("/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes", status_code=status.HTTP_200_OK)
+async def create_nodebalancer_node(nodebalancer_id: int, config_id: int, payload: NodeBalancerNodeCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_nodebalancer_config_or_404(nodebalancer_id, config_id)
+    return store.create_nodebalancer_node(nodebalancer_id, config_id, payload.model_dump(exclude_none=True))
+
+
+@app.get("/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes/{node_id}")
+async def get_nodebalancer_node(nodebalancer_id: int, config_id: int, node_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_nodebalancer_node_or_404(nodebalancer_id, config_id, node_id)
+
+
+@app.put("/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes/{node_id}")
+async def update_nodebalancer_node(nodebalancer_id: int, config_id: int, node_id: int, payload: NodeBalancerNodeUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_nodebalancer_node_or_404(nodebalancer_id, config_id, node_id)
+    return store.update_nodebalancer_node(nodebalancer_id, config_id, node_id, payload.model_dump(exclude_none=True))
+
+
+@app.delete("/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes/{node_id}", status_code=status.HTTP_200_OK)
+async def delete_nodebalancer_node(nodebalancer_id: int, config_id: int, node_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_nodebalancer_node_or_404(nodebalancer_id, config_id, node_id)
+    store.delete_nodebalancer_node(nodebalancer_id, config_id, node_id)
+    return {"deleted": str(node_id)}
 
 
 @app.get("/v4/networking/firewalls")

@@ -18,6 +18,8 @@ It is intentionally narrower than MiniStack's AWS coverage. This MVP focuses on 
 - `databases/instances`
 - `profile/sshkeys`
 - `stackscripts`
+- `nodebalancers/{id}/configs`
+- `nodebalancers/{id}/configs/{config_id}/nodes`
 - `object-storage/buckets`
 - catalog endpoints such as `regions`, `types`, and `images`
 
@@ -42,6 +44,7 @@ Optional persistence is available through `MININODE_STATE_PATH`.
 - Managed database resources with credentials and reset operations
 - Account SSH key resources and instance authorized key validation
 - StackScript resources and instance linkage
+- Nested NodeBalancer configs and backend nodes
 
 ## Quick Start
 
@@ -228,6 +231,24 @@ curl -X POST http://127.0.0.1:8000/v4/stackscripts \
     "script":"#!/bin/bash\necho hello",
     "images":["linode/ubuntu24.04"]
   }'
+```
+
+Create a NodeBalancer config:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/nodebalancers/4000/configs \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"port":80,"protocol":"http","algorithm":"roundrobin"}'
+```
+
+Create a backend node:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/nodebalancers/4000/configs/1/nodes \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"web-1","address":"10.0.0.10:80"}'
 ```
 
 Add a subnet to an existing VPC:

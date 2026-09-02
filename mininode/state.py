@@ -502,6 +502,7 @@ class ResourceStore:
             "client_conn_throttle": payload.get("client_conn_throttle", 0),
             "tags": payload.get("tags", []),
             "transfer": {"total": 0, "out": 0, "in": 0},
+            "configs": [],
         }
         self.nodebalancers[nodebalancer_id] = nodebalancer
         self.record_event("nodebalancer_create", self.entity_ref("nodebalancer", nodebalancer_id, nodebalancer["label"], f"/v4/nodebalancers/{nodebalancer_id}"))
@@ -514,6 +515,91 @@ class ResourceStore:
         self.record_event("nodebalancer_update", self.entity_ref("nodebalancer", nodebalancer_id, nodebalancer["label"], f"/v4/nodebalancers/{nodebalancer_id}"))
         self.persist()
         return clone(nodebalancer)
+
+    def create_nodebalancer_config(self, nodebalancer_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        nodebalancer = self.nodebalancers[nodebalancer_id]
+        config_id = len(nodebalancer["configs"]) + 1
+        config = {
+            "id": config_id,
+            "port": payload["port"],
+            "protocol": payload.get("protocol", "http"),
+            "proxy_protocol": payload.get("proxy_protocol", "none"),
+            "check": payload.get("check", "connection"),
+            "check_interval": payload.get("check_interval", 5),
+            "check_timeout": payload.get("check_timeout", 3),
+            "check_attempts": payload.get("check_attempts", 2),
+            "algorithm": payload.get("algorithm", "roundrobin"),
+            "stickiness": payload.get("stickiness", "none"),
+            "cipher_suite": payload.get("cipher_suite", "recommended"),
+            "ssl_commonname": payload.get("ssl_commonname", ""),
+            "ssl_fingerprint": payload.get("ssl_fingerprint", ""),
+            "nodes": [],
+        }
+        nodebalancer["configs"].append(config)
+        self.record_event("nodebalancer_config_create", self.entity_ref("nodebalancer_config", config_id, str(config["port"]), f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}"), self.entity_ref("nodebalancer", nodebalancer_id, nodebalancer["label"], f"/v4/nodebalancers/{nodebalancer_id}"))
+        self.persist()
+        return clone(config)
+
+    def list_nodebalancer_configs(self, nodebalancer_id: int) -> list[dict[str, Any]]:
+        return clone(self.nodebalancers[nodebalancer_id].get("configs", []))
+
+    def get_nodebalancer_config(self, nodebalancer_id: int, config_id: int) -> dict[str, Any]:
+        for config in self.nodebalancers[nodebalancer_id].get("configs", []):
+            if config["id"] == config_id:
+                return config
+        raise KeyError(config_id)
+
+    def update_nodebalancer_config(self, nodebalancer_id: int, config_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        config = self.get_nodebalancer_config(nodebalancer_id, config_id)
+        config.update(updates)
+        self.record_event("nodebalancer_config_update", self.entity_ref("nodebalancer_config", config_id, str(config["port"]), f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}"))
+        self.persist()
+        return clone(config)
+
+    def delete_nodebalancer_config(self, nodebalancer_id: int, config_id: int) -> None:
+        nodebalancer = self.nodebalancers[nodebalancer_id]
+        config = self.get_nodebalancer_config(nodebalancer_id, config_id)
+        nodebalancer["configs"] = [item for item in nodebalancer.get("configs", []) if item["id"] != config_id]
+        self.record_event("nodebalancer_config_delete", self.entity_ref("nodebalancer_config", config_id, str(config["port"]), f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}"), self.entity_ref("nodebalancer", nodebalancer_id, nodebalancer["label"], f"/v4/nodebalancers/{nodebalancer_id}"))
+        self.persist()
+
+    def create_nodebalancer_node(self, nodebalancer_id: int, config_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        config = self.get_nodebalancer_config(nodebalancer_id, config_id)
+        node_id = len(config["nodes"]) + 1
+        node = {
+            "id": node_id,
+            "label": payload["label"],
+            "address": payload["address"],
+            "weight": payload.get("weight", 100),
+            "mode": payload.get("mode", "accept"),
+            "status": payload.get("status", "UP"),
+            "config_id": config_id,
+        }
+        config["nodes"].append(node)
+        self.record_event("nodebalancer_node_create", self.entity_ref("nodebalancer_node", node_id, node["label"], f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes/{node_id}"), self.entity_ref("nodebalancer_config", config_id, str(config["port"]), f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}"))
+        self.persist()
+        return clone(node)
+
+    def get_nodebalancer_node(self, nodebalancer_id: int, config_id: int, node_id: int) -> dict[str, Any]:
+        config = self.get_nodebalancer_config(nodebalancer_id, config_id)
+        for node in config.get("nodes", []):
+            if node["id"] == node_id:
+                return node
+        raise KeyError(node_id)
+
+    def update_nodebalancer_node(self, nodebalancer_id: int, config_id: int, node_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        node = self.get_nodebalancer_node(nodebalancer_id, config_id, node_id)
+        node.update(updates)
+        self.record_event("nodebalancer_node_update", self.entity_ref("nodebalancer_node", node_id, node["label"], f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes/{node_id}"))
+        self.persist()
+        return clone(node)
+
+    def delete_nodebalancer_node(self, nodebalancer_id: int, config_id: int, node_id: int) -> None:
+        config = self.get_nodebalancer_config(nodebalancer_id, config_id)
+        node = self.get_nodebalancer_node(nodebalancer_id, config_id, node_id)
+        config["nodes"] = [item for item in config.get("nodes", []) if item["id"] != node_id]
+        self.record_event("nodebalancer_node_delete", self.entity_ref("nodebalancer_node", node_id, node["label"], f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes/{node_id}"), self.entity_ref("nodebalancer_config", config_id, str(config["port"]), f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}"))
+        self.persist()
 
     def create_firewall(self, payload: dict[str, Any]) -> dict[str, Any]:
         firewall_id = next(self.next_firewall_id)

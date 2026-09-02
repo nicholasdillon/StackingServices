@@ -506,6 +506,52 @@ def test_stackscript_lifecycle_and_instance_linkage() -> None:
     assert missing.status_code == 404
 
 
+def test_nodebalancer_config_and_node_lifecycle() -> None:
+    nodebalancer = client.post(
+        "/v4/nodebalancers",
+        headers=AUTH,
+        json={"label": "public-lb", "region": "us-east"},
+    )
+    assert nodebalancer.status_code == 200
+    nodebalancer_id = nodebalancer.json()["id"]
+
+    config = client.post(
+        f"/v4/nodebalancers/{nodebalancer_id}/configs",
+        headers=AUTH,
+        json={"port": 80, "protocol": "http", "algorithm": "roundrobin"},
+    )
+    assert config.status_code == 200
+    config_id = config.json()["id"]
+
+    updated_config = client.put(
+        f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}",
+        headers=AUTH,
+        json={"check": "http", "check_interval": 10},
+    )
+    assert updated_config.status_code == 200
+    assert updated_config.json()["check"] == "http"
+
+    node = client.post(
+        f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes",
+        headers=AUTH,
+        json={"label": "web-1", "address": "10.0.0.10:80", "weight": 75},
+    )
+    assert node.status_code == 200
+    node_id = node.json()["id"]
+
+    updated_node = client.put(
+        f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes/{node_id}",
+        headers=AUTH,
+        json={"mode": "drain"},
+    )
+    assert updated_node.status_code == 200
+    assert updated_node.json()["mode"] == "drain"
+
+    nodes = client.get(f"/v4/nodebalancers/{nodebalancer_id}/configs/{config_id}/nodes", headers=AUTH)
+    assert nodes.status_code == 200
+    assert len(nodes.json()) == 1
+
+
 def test_store_persistence(tmp_path: Path) -> None:
     state_file = tmp_path / "state.json"
     store.configure(str(state_file))
