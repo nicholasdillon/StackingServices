@@ -138,6 +138,41 @@ class FirewallUpdate(BaseModel):
     rules: FirewallRules | None = None
 
 
+class DiskCreate(BaseModel):
+    label: str = Field(min_length=1)
+    size: int = Field(ge=1)
+    filesystem: str | None = None
+
+
+class DiskUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    filesystem: str | None = None
+
+
+class ConfigCreate(BaseModel):
+    label: str = Field(min_length=1)
+    kernel: str | None = None
+    comments: str | None = None
+    devices: dict[str, Any] = Field(default_factory=dict)
+    helpers: dict[str, Any] = Field(default_factory=dict)
+    interfaces: list[dict[str, Any]] = Field(default_factory=list)
+    root_device: str | None = None
+    run_level: str | None = None
+    virt_mode: str | None = None
+
+
+class ConfigUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    kernel: str | None = None
+    comments: str | None = None
+    devices: dict[str, Any] | None = None
+    helpers: dict[str, Any] | None = None
+    interfaces: list[dict[str, Any]] | None = None
+    root_device: str | None = None
+    run_level: str | None = None
+    virt_mode: str | None = None
+
+
 def parse_filter(filter_value: str | None) -> dict[str, Any]:
     if not filter_value:
         return {}
@@ -239,6 +274,22 @@ def get_firewall_or_404(firewall_id: int) -> dict[str, Any]:
     return firewall
 
 
+def get_disk_or_404(instance_id: int, disk_id: int) -> dict[str, Any]:
+    get_instance_or_404(instance_id)
+    disk = store.instance_disks.get(disk_id)
+    if not disk or disk["linode_id"] != instance_id:
+        error_response("Disk not found.", code=status.HTTP_404_NOT_FOUND)
+    return disk
+
+
+def get_config_or_404(instance_id: int, config_id: int) -> dict[str, Any]:
+    get_instance_or_404(instance_id)
+    config = store.instance_configs.get(config_id)
+    if not config or config["linode_id"] != instance_id:
+        error_response("Config not found.", code=status.HTTP_404_NOT_FOUND)
+    return config
+
+
 def get_subnet_or_404(vpc_id: int, subnet_id: int) -> dict[str, Any]:
     get_vpc_or_404(vpc_id)
     try:
@@ -270,10 +321,13 @@ async def health() -> dict[str, Any]:
         "service": "mininode",
         "resources": {
             "instances": len(store.instances),
+            "instance_disks": len(store.instance_disks),
+            "instance_configs": len(store.instance_configs),
             "volumes": len(store.volumes),
             "vpcs": len(store.vpcs),
             "nodebalancers": len(store.nodebalancers),
             "firewalls": len(store.firewalls),
+            "events": len(store.events),
             "buckets": len(store.buckets),
         },
     }
@@ -309,6 +363,19 @@ async def account(_: str = Depends(require_bearer_token)) -> dict[str, Any]:
         "company": "MiniNode Local",
         "credit_card": {"last_four": "4242", "expiry": "never"},
     }
+
+
+@app.get("/v4/account/events")
+async def list_events(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="desc", alias="+order"),
+    _: str = Depends(require_bearer_token),
+) -> dict[str, Any]:
+    items = apply_order(apply_filter(store.list_events(), filter_value), order_by, order)
+    return paginate(items, page, page_size)
 
 
 @app.get("/v4/regions")
@@ -387,6 +454,66 @@ async def get_instance(instance_id: int, _: str = Depends(require_bearer_token))
     return get_instance_or_404(instance_id)
 
 
+@app.get("/v4/linode/instances/{instance_id}/disks")
+async def list_disks(instance_id: int, _: str = Depends(require_bearer_token)) -> list[dict[str, Any]]:
+    get_instance_or_404(instance_id)
+    return store.list_disks(instance_id)
+
+
+@app.post("/v4/linode/instances/{instance_id}/disks", status_code=status.HTTP_200_OK)
+async def create_disk(instance_id: int, payload: DiskCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_instance_or_404(instance_id)
+    return store.create_disk(instance_id, payload.model_dump(exclude_none=True))
+
+
+@app.get("/v4/linode/instances/{instance_id}/disks/{disk_id}")
+async def get_disk(instance_id: int, disk_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_disk_or_404(instance_id, disk_id)
+
+
+@app.put("/v4/linode/instances/{instance_id}/disks/{disk_id}")
+async def update_disk(instance_id: int, disk_id: int, payload: DiskUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_disk_or_404(instance_id, disk_id)
+    return store.update_disk(disk_id, payload.model_dump(exclude_none=True))
+
+
+@app.delete("/v4/linode/instances/{instance_id}/disks/{disk_id}", status_code=status.HTTP_200_OK)
+async def delete_disk(instance_id: int, disk_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_disk_or_404(instance_id, disk_id)
+    store.delete_disk(disk_id)
+    return {"deleted": str(disk_id)}
+
+
+@app.get("/v4/linode/instances/{instance_id}/configs")
+async def list_configs(instance_id: int, _: str = Depends(require_bearer_token)) -> list[dict[str, Any]]:
+    get_instance_or_404(instance_id)
+    return store.list_configs(instance_id)
+
+
+@app.post("/v4/linode/instances/{instance_id}/configs", status_code=status.HTTP_200_OK)
+async def create_config(instance_id: int, payload: ConfigCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_instance_or_404(instance_id)
+    return store.create_config(instance_id, payload.model_dump(exclude_none=True))
+
+
+@app.get("/v4/linode/instances/{instance_id}/configs/{config_id}")
+async def get_config(instance_id: int, config_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_config_or_404(instance_id, config_id)
+
+
+@app.put("/v4/linode/instances/{instance_id}/configs/{config_id}")
+async def update_config(instance_id: int, config_id: int, payload: ConfigUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_config_or_404(instance_id, config_id)
+    return store.update_config(config_id, payload.model_dump(exclude_none=True))
+
+
+@app.delete("/v4/linode/instances/{instance_id}/configs/{config_id}", status_code=status.HTTP_200_OK)
+async def delete_config(instance_id: int, config_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_config_or_404(instance_id, config_id)
+    store.delete_config(config_id)
+    return {"deleted": str(config_id)}
+
+
 @app.put("/v4/linode/instances/{instance_id}")
 async def update_instance(instance_id: int, payload: InstanceUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
     get_instance_or_404(instance_id)
@@ -407,19 +534,19 @@ async def delete_instance(instance_id: int, _: str = Depends(require_bearer_toke
 @app.post("/v4/linode/instances/{instance_id}/boot")
 async def boot_instance(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
     get_instance_or_404(instance_id)
-    return store.update_instance(instance_id, {"status": "running"})
+    return store.set_instance_status(instance_id, "running", "linode_boot")
 
 
 @app.post("/v4/linode/instances/{instance_id}/shutdown")
 async def shutdown_instance(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
     get_instance_or_404(instance_id)
-    return store.update_instance(instance_id, {"status": "offline"})
+    return store.set_instance_status(instance_id, "offline", "linode_shutdown")
 
 
 @app.post("/v4/linode/instances/{instance_id}/reboot")
 async def reboot_instance(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
     get_instance_or_404(instance_id)
-    return store.update_instance(instance_id, {"status": "running"})
+    return store.set_instance_status(instance_id, "running", "linode_reboot")
 
 
 @app.get("/v4/volumes")
@@ -458,13 +585,13 @@ async def attach_volume(volume_id: int, payload: VolumeAttach, _: str = Depends(
     get_volume_or_404(volume_id)
     if payload.linode_id not in store.instances:
         error_response("Linode not found.", field="linode_id", code=status.HTTP_404_NOT_FOUND)
-    return store.update_volume(volume_id, {"linode_id": payload.linode_id})
+    return store.update_volume(volume_id, {"linode_id": payload.linode_id}, action="volume_attach")
 
 
 @app.post("/v4/volumes/{volume_id}/detach")
 async def detach_volume(volume_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
     get_volume_or_404(volume_id)
-    return store.update_volume(volume_id, {"linode_id": None})
+    return store.update_volume(volume_id, {"linode_id": None}, action="volume_detach")
 
 
 @app.delete("/v4/volumes/{volume_id}", status_code=status.HTTP_200_OK)

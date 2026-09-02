@@ -70,6 +70,11 @@ def test_instance_lifecycle() -> None:
     assert update.json()["label"] == "web-1-renamed"
     assert update.json()["tags"] == ["frontend"]
 
+    events = client.get("/v4/account/events", headers=AUTH)
+    assert events.status_code == 200
+    assert events.json()["results"] >= 4
+    assert events.json()["data"][0]["action"] in {"linode_update", "linode_reboot"}
+
 
 def test_volume_attach() -> None:
     instance = client.post(
@@ -222,6 +227,83 @@ def test_filter_and_ordering() -> None:
     assert body["data"][0]["label"] == "a-first"
 
 
+def test_disk_and_config_lifecycle() -> None:
+    instance = client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "vm-a",
+            "region": "us-east",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+        },
+    ).json()
+
+    disk = client.post(
+        f"/v4/linode/instances/{instance['id']}/disks",
+        headers=AUTH,
+        json={"label": "root-disk", "size": 20480, "filesystem": "ext4"},
+    )
+    assert disk.status_code == 200
+    disk_id = disk.json()["id"]
+
+    disk_update = client.put(
+        f"/v4/linode/instances/{instance['id']}/disks/{disk_id}",
+        headers=AUTH,
+        json={"label": "root-disk-renamed"},
+    )
+    assert disk_update.status_code == 200
+    assert disk_update.json()["label"] == "root-disk-renamed"
+
+    config = client.post(
+        f"/v4/linode/instances/{instance['id']}/configs",
+        headers=AUTH,
+        json={
+            "label": "primary-config",
+            "kernel": "linode/latest-64bit",
+            "devices": {"sda": {"disk_id": disk_id}},
+            "interfaces": [{"purpose": "public"}],
+        },
+    )
+    assert config.status_code == 200
+    config_id = config.json()["id"]
+
+    fetched = client.get(f"/v4/linode/instances/{instance['id']}/configs/{config_id}", headers=AUTH)
+    assert fetched.status_code == 200
+    assert fetched.json()["devices"]["sda"]["disk_id"] == disk_id
+
+    listed_disks = client.get(f"/v4/linode/instances/{instance['id']}/disks", headers=AUTH)
+    assert listed_disks.status_code == 200
+    assert len(listed_disks.json()) == 1
+
+    listed_configs = client.get(f"/v4/linode/instances/{instance['id']}/configs", headers=AUTH)
+    assert listed_configs.status_code == 200
+    assert len(listed_configs.json()) == 1
+
+
+def test_events_include_secondary_entity() -> None:
+    vpc = client.post(
+        "/v4/vpcs",
+        headers=AUTH,
+        json={"label": "network-b", "region": "us-east"},
+    ).json()
+
+    client.post(
+        f"/v4/vpcs/{vpc['id']}/subnets",
+        headers=AUTH,
+        json={"label": "private-c", "ipv4": "10.30.0.0/24"},
+    )
+
+    events = client.get(
+        "/v4/account/events",
+        headers=AUTH,
+        params={"+filter": json.dumps({"action": "subnet_create"})},
+    )
+    assert events.status_code == 200
+    assert events.json()["results"] == 1
+    assert events.json()["data"][0]["secondary_entity"]["type"] == "vpc"
+
+
 def test_store_persistence(tmp_path: Path) -> None:
     state_file = tmp_path / "state.json"
     store.configure(str(state_file))
@@ -248,3 +330,4 @@ def test_store_persistence(tmp_path: Path) -> None:
     assert len(store.instances) == 1
     restored = next(iter(store.instances.values()))
     assert restored["label"] == "persisted-1"
+    assert len(store.events) >= 1

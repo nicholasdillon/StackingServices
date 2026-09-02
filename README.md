@@ -9,6 +9,8 @@ It is intentionally narrower than MiniStack's AWS coverage. This MVP focuses on 
 - `vpcs`
 - `nodebalancers`
 - `networking/firewalls`
+- `linode/instances/{id}/disks`
+- `linode/instances/{id}/configs`
 - `object-storage/buckets`
 - catalog endpoints such as `regions`, `types`, and `images`
 
@@ -27,6 +29,8 @@ Optional persistence is available through `MININODE_STATE_PATH`.
 - Basic Linode-style `+filter`, `+order_by`, and `+order` support on list endpoints
 - `PUT` update endpoints for core mutable resources
 - Nested VPC subnet endpoints and basic firewall resources
+- Instance disk and config resources
+- Account event history for control-plane operations
 
 ## Quick Start
 
@@ -123,6 +127,35 @@ curl -X POST http://127.0.0.1:8000/v4/networking/firewalls \
       "outbound": []
     }
   }'
+```
+
+Create an instance disk:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/linode/instances/1000/disks \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"root-disk","size":20480,"filesystem":"ext4"}'
+```
+
+Create an instance config:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/linode/instances/1000/configs \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label":"primary-config",
+    "devices":{"sda":{"disk_id":1500}},
+    "interfaces":[{"purpose":"public"}]
+  }'
+```
+
+Inspect control-plane events:
+
+```bash
+curl http://127.0.0.1:8000/v4/account/events \
+  -H "Authorization: Bearer $LINODE_TOKEN"
 ```
 
 Add a subnet to an existing VPC:

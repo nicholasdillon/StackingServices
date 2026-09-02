@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from copy import deepcopy
 from dataclasses import dataclass, field
 from itertools import count
 from math import ceil
+from pathlib import Path
 from typing import Any
 
+
+NOW = "2026-09-02T00:00:00"
 
 REGIONS = [
     {
@@ -95,31 +97,43 @@ def clone(value: Any) -> Any:
 class ResourceStore:
     state_path: Path | None = None
     instances: dict[int, dict[str, Any]] = field(default_factory=dict)
+    instance_disks: dict[int, dict[str, Any]] = field(default_factory=dict)
+    instance_configs: dict[int, dict[str, Any]] = field(default_factory=dict)
     volumes: dict[int, dict[str, Any]] = field(default_factory=dict)
     vpcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     nodebalancers: dict[int, dict[str, Any]] = field(default_factory=dict)
     firewalls: dict[int, dict[str, Any]] = field(default_factory=dict)
+    events: dict[int, dict[str, Any]] = field(default_factory=dict)
     buckets: dict[str, dict[str, Any]] = field(default_factory=dict)
     next_instance_id: count = field(default_factory=lambda: count(1000))
+    next_disk_id: count = field(default_factory=lambda: count(1500))
+    next_config_id: count = field(default_factory=lambda: count(1750))
     next_volume_id: count = field(default_factory=lambda: count(2000))
     next_vpc_id: count = field(default_factory=lambda: count(3000))
     next_subnet_id: count = field(default_factory=lambda: count(3500))
     next_nodebalancer_id: count = field(default_factory=lambda: count(4000))
     next_firewall_id: count = field(default_factory=lambda: count(5000))
+    next_event_id: count = field(default_factory=lambda: count(9000))
 
     def reset(self) -> None:
         self.instances.clear()
+        self.instance_disks.clear()
+        self.instance_configs.clear()
         self.volumes.clear()
         self.vpcs.clear()
         self.nodebalancers.clear()
         self.firewalls.clear()
+        self.events.clear()
         self.buckets.clear()
         self.next_instance_id = count(1000)
+        self.next_disk_id = count(1500)
+        self.next_config_id = count(1750)
         self.next_volume_id = count(2000)
         self.next_vpc_id = count(3000)
         self.next_subnet_id = count(3500)
         self.next_nodebalancer_id = count(4000)
         self.next_firewall_id = count(5000)
+        self.next_event_id = count(9000)
 
     def configure(self, state_path: str | None) -> None:
         self.state_path = Path(state_path) if state_path else None
@@ -130,17 +144,23 @@ class ResourceStore:
 
         data = json.loads(self.state_path.read_text())
         self.instances = {int(key): value for key, value in data.get("instances", {}).items()}
+        self.instance_disks = {int(key): value for key, value in data.get("instance_disks", {}).items()}
+        self.instance_configs = {int(key): value for key, value in data.get("instance_configs", {}).items()}
         self.volumes = {int(key): value for key, value in data.get("volumes", {}).items()}
         self.vpcs = {int(key): value for key, value in data.get("vpcs", {}).items()}
         self.nodebalancers = {int(key): value for key, value in data.get("nodebalancers", {}).items()}
         self.firewalls = {int(key): value for key, value in data.get("firewalls", {}).items()}
+        self.events = {int(key): value for key, value in data.get("events", {}).items()}
         self.buckets = data.get("buckets", {})
         self.next_instance_id = count(data.get("next_instance_id", 1000))
+        self.next_disk_id = count(data.get("next_disk_id", 1500))
+        self.next_config_id = count(data.get("next_config_id", 1750))
         self.next_volume_id = count(data.get("next_volume_id", 2000))
         self.next_vpc_id = count(data.get("next_vpc_id", 3000))
         self.next_subnet_id = count(data.get("next_subnet_id", 3500))
         self.next_nodebalancer_id = count(data.get("next_nodebalancer_id", 4000))
         self.next_firewall_id = count(data.get("next_firewall_id", 5000))
+        self.next_event_id = count(data.get("next_event_id", 9000))
 
     def save(self) -> None:
         if not self.state_path:
@@ -151,17 +171,23 @@ class ResourceStore:
             json.dumps(
                 {
                     "instances": self.instances,
+                    "instance_disks": self.instance_disks,
+                    "instance_configs": self.instance_configs,
                     "volumes": self.volumes,
                     "vpcs": self.vpcs,
                     "nodebalancers": self.nodebalancers,
                     "firewalls": self.firewalls,
+                    "events": self.events,
                     "buckets": self.buckets,
                     "next_instance_id": self.next_counter_value("next_instance_id"),
+                    "next_disk_id": self.next_counter_value("next_disk_id"),
+                    "next_config_id": self.next_counter_value("next_config_id"),
                     "next_volume_id": self.next_counter_value("next_volume_id"),
                     "next_vpc_id": self.next_counter_value("next_vpc_id"),
                     "next_subnet_id": self.next_counter_value("next_subnet_id"),
                     "next_nodebalancer_id": self.next_counter_value("next_nodebalancer_id"),
                     "next_firewall_id": self.next_counter_value("next_firewall_id"),
+                    "next_event_id": self.next_counter_value("next_event_id"),
                 },
                 indent=2,
                 sort_keys=True,
@@ -188,6 +214,9 @@ class ResourceStore:
 
     def list_clusters(self) -> list[dict[str, Any]]:
         return clone(OBJECT_STORAGE_CLUSTERS)
+
+    def list_events(self) -> list[dict[str, Any]]:
+        return clone(sorted(self.events.values(), key=lambda item: item["id"], reverse=True))
 
     def region_exists(self, region: str) -> bool:
         return any(item["id"] == region for item in REGIONS)
@@ -218,16 +247,93 @@ class ResourceStore:
             "specs": next(item for item in TYPES if item["id"] == payload["type"]),
             "alerts": {"cpu": 90, "io": 10000, "network_in": 10, "network_out": 10, "transfer_quota": 80},
             "backups": {"enabled": False, "available": False, "schedule": None, "last_successful": None},
+            "created": NOW,
+            "updated": NOW,
         }
         self.instances[instance_id] = instance
+        self.record_event("linode_create", self.entity_ref("linode", instance_id, instance["label"], f"/v4/linode/instances/{instance_id}"))
         self.persist()
         return clone(instance)
 
     def update_instance(self, instance_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         instance = self.instances[instance_id]
         instance.update(updates)
+        instance["updated"] = NOW
+        self.record_event("linode_update", self.entity_ref("linode", instance_id, instance["label"], f"/v4/linode/instances/{instance_id}"))
         self.persist()
         return clone(instance)
+
+    def set_instance_status(self, instance_id: int, status: str, action: str) -> dict[str, Any]:
+        instance = self.instances[instance_id]
+        instance["status"] = status
+        instance["updated"] = NOW
+        self.record_event(action, self.entity_ref("linode", instance_id, instance["label"], f"/v4/linode/instances/{instance_id}"))
+        self.persist()
+        return clone(instance)
+
+    def create_disk(self, instance_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        disk_id = next(self.next_disk_id)
+        disk = {
+            "id": disk_id,
+            "linode_id": instance_id,
+            "label": payload["label"],
+            "size": payload["size"],
+            "filesystem": payload.get("filesystem", "ext4"),
+            "status": "ready",
+            "created": NOW,
+            "updated": NOW,
+        }
+        self.instance_disks[disk_id] = disk
+        self.record_event("disk_create", self.entity_ref("disk", disk_id, disk["label"], f"/v4/linode/instances/{instance_id}/disks/{disk_id}"), self.entity_ref("linode", instance_id, self.instances[instance_id]["label"], f"/v4/linode/instances/{instance_id}"))
+        self.persist()
+        return clone(disk)
+
+    def list_disks(self, instance_id: int) -> list[dict[str, Any]]:
+        return clone([disk for disk in self.instance_disks.values() if disk["linode_id"] == instance_id])
+
+    def update_disk(self, disk_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        disk = self.instance_disks[disk_id]
+        disk.update(updates)
+        disk["updated"] = NOW
+        self.record_event("disk_update", self.entity_ref("disk", disk_id, disk["label"], f"/v4/linode/instances/{disk['linode_id']}/disks/{disk_id}"))
+        self.persist()
+        return clone(disk)
+
+    def create_config(self, instance_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        config_id = next(self.next_config_id)
+        config = {
+            "id": config_id,
+            "linode_id": instance_id,
+            "label": payload["label"],
+            "kernel": payload.get("kernel", "linode/latest-64bit"),
+            "comments": payload.get("comments", ""),
+            "devices": payload.get("devices", {}),
+            "helpers": payload.get(
+                "helpers",
+                {"updatedb_disabled": False, "distro": True, "modules_dep": True, "network": True},
+            ),
+            "interfaces": payload.get("interfaces", []),
+            "root_device": payload.get("root_device", "/dev/sda"),
+            "run_level": payload.get("run_level", "default"),
+            "virt_mode": payload.get("virt_mode", "paravirt"),
+            "created": NOW,
+            "updated": NOW,
+        }
+        self.instance_configs[config_id] = config
+        self.record_event("config_create", self.entity_ref("config", config_id, config["label"], f"/v4/linode/instances/{instance_id}/configs/{config_id}"), self.entity_ref("linode", instance_id, self.instances[instance_id]["label"], f"/v4/linode/instances/{instance_id}"))
+        self.persist()
+        return clone(config)
+
+    def list_configs(self, instance_id: int) -> list[dict[str, Any]]:
+        return clone([config for config in self.instance_configs.values() if config["linode_id"] == instance_id])
+
+    def update_config(self, config_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        config = self.instance_configs[config_id]
+        config.update(updates)
+        config["updated"] = NOW
+        self.record_event("config_update", self.entity_ref("config", config_id, config["label"], f"/v4/linode/instances/{config['linode_id']}/configs/{config_id}"))
+        self.persist()
+        return clone(config)
 
     def create_volume(self, payload: dict[str, Any]) -> dict[str, Any]:
         volume_id = next(self.next_volume_id)
@@ -242,12 +348,14 @@ class ResourceStore:
             "filesystem_path": f"/dev/disk/by-id/scsi-0Linode_Volume_{volume_id}",
         }
         self.volumes[volume_id] = volume
+        self.record_event("volume_create", self.entity_ref("volume", volume_id, volume["label"], f"/v4/volumes/{volume_id}"))
         self.persist()
         return clone(volume)
 
-    def update_volume(self, volume_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+    def update_volume(self, volume_id: int, updates: dict[str, Any], action: str = "volume_update") -> dict[str, Any]:
         volume = self.volumes[volume_id]
         volume.update(updates)
+        self.record_event(action, self.entity_ref("volume", volume_id, volume["label"], f"/v4/volumes/{volume_id}"))
         self.persist()
         return clone(volume)
 
@@ -259,10 +367,11 @@ class ResourceStore:
             "region": payload["region"],
             "description": payload.get("description", ""),
             "subnets": [self.build_subnet(subnet) for subnet in payload.get("subnets", [])],
-            "created": "2026-09-02T00:00:00",
-            "updated": "2026-09-02T00:00:00",
+            "created": NOW,
+            "updated": NOW,
         }
         self.vpcs[vpc_id] = vpc
+        self.record_event("vpc_create", self.entity_ref("vpc", vpc_id, vpc["label"], f"/v4/vpcs/{vpc_id}"))
         self.persist()
         return clone(vpc)
 
@@ -271,6 +380,8 @@ class ResourceStore:
         if "subnets" in updates:
             updates["subnets"] = [self.build_subnet(subnet) for subnet in updates["subnets"]]
         vpc.update(updates)
+        vpc["updated"] = NOW
+        self.record_event("vpc_update", self.entity_ref("vpc", vpc_id, vpc["label"], f"/v4/vpcs/{vpc_id}"))
         self.persist()
         return clone(vpc)
 
@@ -279,21 +390,25 @@ class ResourceStore:
             "id": next(self.next_subnet_id),
             "label": payload["label"],
             "ipv4": payload["ipv4"],
-            "created": "2026-09-02T00:00:00",
-            "updated": "2026-09-02T00:00:00",
+            "created": NOW,
+            "updated": NOW,
         }
 
     def create_subnet(self, vpc_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         vpc = self.vpcs[vpc_id]
         subnet = self.build_subnet(payload)
         vpc.setdefault("subnets", []).append(subnet)
+        vpc["updated"] = NOW
+        self.record_event("subnet_create", self.entity_ref("subnet", subnet["id"], subnet["label"], f"/v4/vpcs/{vpc_id}/subnets/{subnet['id']}"), self.entity_ref("vpc", vpc_id, vpc["label"], f"/v4/vpcs/{vpc_id}"))
         self.persist()
         return clone(subnet)
 
     def update_subnet(self, vpc_id: int, subnet_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         subnet = self.get_subnet(vpc_id, subnet_id)
         subnet.update(updates)
-        subnet["updated"] = "2026-09-02T00:00:00"
+        subnet["updated"] = NOW
+        self.vpcs[vpc_id]["updated"] = NOW
+        self.record_event("subnet_update", self.entity_ref("subnet", subnet_id, subnet["label"], f"/v4/vpcs/{vpc_id}/subnets/{subnet_id}"))
         self.persist()
         return clone(subnet)
 
@@ -305,7 +420,10 @@ class ResourceStore:
 
     def delete_subnet(self, vpc_id: int, subnet_id: int) -> None:
         vpc = self.vpcs[vpc_id]
-        vpc["subnets"] = [subnet for subnet in vpc.get("subnets", []) if subnet["id"] != subnet_id]
+        subnet = self.get_subnet(vpc_id, subnet_id)
+        vpc["subnets"] = [item for item in vpc.get("subnets", []) if item["id"] != subnet_id]
+        vpc["updated"] = NOW
+        self.record_event("subnet_delete", self.entity_ref("subnet", subnet_id, subnet["label"], f"/v4/vpcs/{vpc_id}/subnets/{subnet_id}"), self.entity_ref("vpc", vpc_id, vpc["label"], f"/v4/vpcs/{vpc_id}"))
         self.persist()
 
     def create_nodebalancer(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -321,12 +439,14 @@ class ResourceStore:
             "transfer": {"total": 0, "out": 0, "in": 0},
         }
         self.nodebalancers[nodebalancer_id] = nodebalancer
+        self.record_event("nodebalancer_create", self.entity_ref("nodebalancer", nodebalancer_id, nodebalancer["label"], f"/v4/nodebalancers/{nodebalancer_id}"))
         self.persist()
         return clone(nodebalancer)
 
     def update_nodebalancer(self, nodebalancer_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         nodebalancer = self.nodebalancers[nodebalancer_id]
         nodebalancer.update(updates)
+        self.record_event("nodebalancer_update", self.entity_ref("nodebalancer", nodebalancer_id, nodebalancer["label"], f"/v4/nodebalancers/{nodebalancer_id}"))
         self.persist()
         return clone(nodebalancer)
 
@@ -339,17 +459,19 @@ class ResourceStore:
             "tags": payload.get("tags", []),
             "rules": payload.get("rules", {"inbound": [], "outbound": []}),
             "linodes": payload.get("linodes", []),
-            "created": "2026-09-02T00:00:00",
-            "updated": "2026-09-02T00:00:00",
+            "created": NOW,
+            "updated": NOW,
         }
         self.firewalls[firewall_id] = firewall
+        self.record_event("firewall_create", self.entity_ref("firewall", firewall_id, firewall["label"], f"/v4/networking/firewalls/{firewall_id}"))
         self.persist()
         return clone(firewall)
 
     def update_firewall(self, firewall_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         firewall = self.firewalls[firewall_id]
         firewall.update(updates)
-        firewall["updated"] = "2026-09-02T00:00:00"
+        firewall["updated"] = NOW
+        self.record_event("firewall_update", self.entity_ref("firewall", firewall_id, firewall["label"], f"/v4/networking/firewalls/{firewall_id}"))
         self.persist()
         return clone(firewall)
 
@@ -360,36 +482,87 @@ class ResourceStore:
             "cluster": payload["cluster"],
             "region": payload["region"],
             "hostname": f"{payload['label']}.{payload['cluster']}.linodeobjects.com",
-            "created": "2026-09-02T00:00:00",
+            "created": NOW,
             "objects": 0,
             "size": 0,
         }
         self.buckets[key] = bucket
+        self.record_event("bucket_create", self.entity_ref("bucket", payload["label"], bucket["label"], f"/v4/object-storage/buckets/{payload['cluster']}/{payload['label']}"))
         self.persist()
         return clone(bucket)
 
+    def create_event(self, payload: dict[str, Any]) -> None:
+        event_id = next(self.next_event_id)
+        self.events[event_id] = {
+            "id": event_id,
+            "action": payload["action"],
+            "created": NOW,
+            "seen": False,
+            "read": False,
+            "status": payload.get("status", "finished"),
+            "percent_complete": payload.get("percent_complete", 100),
+            "time_remaining": None,
+            "rate": None,
+            "username": "mininode",
+            "entity": payload.get("entity"),
+            "secondary_entity": payload.get("secondary_entity"),
+        }
+
+    def record_event(self, action: str, entity: dict[str, Any] | None, secondary_entity: dict[str, Any] | None = None) -> None:
+        self.create_event({"action": action, "entity": entity, "secondary_entity": secondary_entity})
+
+    @staticmethod
+    def entity_ref(resource_type: str, resource_id: int | str, label: str, url: str) -> dict[str, Any]:
+        return {"type": resource_type, "id": resource_id, "label": label, "url": url}
+
     def delete_instance(self, instance_id: int) -> None:
+        instance = self.instances[instance_id]
+        self.instance_disks = {disk_id: disk for disk_id, disk in self.instance_disks.items() if disk["linode_id"] != instance_id}
+        self.instance_configs = {config_id: config for config_id, config in self.instance_configs.items() if config["linode_id"] != instance_id}
         del self.instances[instance_id]
+        self.record_event("linode_delete", self.entity_ref("linode", instance_id, instance["label"], f"/v4/linode/instances/{instance_id}"))
+        self.persist()
+
+    def delete_disk(self, disk_id: int) -> None:
+        disk = self.instance_disks[disk_id]
+        del self.instance_disks[disk_id]
+        self.record_event("disk_delete", self.entity_ref("disk", disk_id, disk["label"], f"/v4/linode/instances/{disk['linode_id']}/disks/{disk_id}"))
+        self.persist()
+
+    def delete_config(self, config_id: int) -> None:
+        config = self.instance_configs[config_id]
+        del self.instance_configs[config_id]
+        self.record_event("config_delete", self.entity_ref("config", config_id, config["label"], f"/v4/linode/instances/{config['linode_id']}/configs/{config_id}"))
         self.persist()
 
     def delete_volume(self, volume_id: int) -> None:
+        volume = self.volumes[volume_id]
         del self.volumes[volume_id]
+        self.record_event("volume_delete", self.entity_ref("volume", volume_id, volume["label"], f"/v4/volumes/{volume_id}"))
         self.persist()
 
     def delete_vpc(self, vpc_id: int) -> None:
+        vpc = self.vpcs[vpc_id]
         del self.vpcs[vpc_id]
+        self.record_event("vpc_delete", self.entity_ref("vpc", vpc_id, vpc["label"], f"/v4/vpcs/{vpc_id}"))
         self.persist()
 
     def delete_nodebalancer(self, nodebalancer_id: int) -> None:
+        nodebalancer = self.nodebalancers[nodebalancer_id]
         del self.nodebalancers[nodebalancer_id]
+        self.record_event("nodebalancer_delete", self.entity_ref("nodebalancer", nodebalancer_id, nodebalancer["label"], f"/v4/nodebalancers/{nodebalancer_id}"))
         self.persist()
 
     def delete_firewall(self, firewall_id: int) -> None:
+        firewall = self.firewalls[firewall_id]
         del self.firewalls[firewall_id]
+        self.record_event("firewall_delete", self.entity_ref("firewall", firewall_id, firewall["label"], f"/v4/networking/firewalls/{firewall_id}"))
         self.persist()
 
     def delete_bucket(self, key: str) -> None:
+        bucket = self.buckets[key]
         del self.buckets[key]
+        self.record_event("bucket_delete", self.entity_ref("bucket", bucket["label"], bucket["label"], f"/v4/object-storage/buckets/{bucket['cluster']}/{bucket['label']}"))
         self.persist()
 
     @staticmethod
