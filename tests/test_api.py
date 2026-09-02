@@ -552,6 +552,43 @@ def test_nodebalancer_config_and_node_lifecycle() -> None:
     assert len(nodes.json()) == 1
 
 
+def test_instance_backup_lifecycle() -> None:
+    instance = client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "backup-node",
+            "region": "us-east",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+        },
+    ).json()
+
+    backups = client.get(f"/v4/linode/instances/{instance['id']}/backups", headers=AUTH)
+    assert backups.status_code == 200
+    assert backups.json()["enabled"] is False
+
+    enabled = client.post(f"/v4/linode/instances/{instance['id']}/backups/enable", headers=AUTH)
+    assert enabled.status_code == 200
+    assert enabled.json()["enabled"] is True
+
+    snapshot = client.post(f"/v4/linode/instances/{instance['id']}/backups", headers=AUTH)
+    assert snapshot.status_code == 200
+    backup_id = snapshot.json()["id"]
+
+    fetched = client.get(f"/v4/linode/instances/{instance['id']}/backups/{backup_id}", headers=AUTH)
+    assert fetched.status_code == 200
+    assert fetched.json()["status"] == "successful"
+
+    restored = client.post(f"/v4/linode/instances/{instance['id']}/backups/{backup_id}/restore", headers=AUTH)
+    assert restored.status_code == 200
+    assert restored.json()["id"] == backup_id
+
+    cancelled = client.post(f"/v4/linode/instances/{instance['id']}/backups/cancel", headers=AUTH)
+    assert cancelled.status_code == 200
+    assert cancelled.json()["enabled"] is False
+
+
 def test_store_persistence(tmp_path: Path) -> None:
     state_file = tmp_path / "state.json"
     store.configure(str(state_file))

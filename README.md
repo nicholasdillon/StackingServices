@@ -20,6 +20,7 @@ It is intentionally narrower than MiniStack's AWS coverage. This MVP focuses on 
 - `stackscripts`
 - `nodebalancers/{id}/configs`
 - `nodebalancers/{id}/configs/{config_id}/nodes`
+- `linode/instances/{id}/backups`
 - `object-storage/buckets`
 - catalog endpoints such as `regions`, `types`, and `images`
 
@@ -45,6 +46,7 @@ Optional persistence is available through `MININODE_STATE_PATH`.
 - Account SSH key resources and instance authorized key validation
 - StackScript resources and instance linkage
 - Nested NodeBalancer configs and backend nodes
+- Instance backup enable, snapshot, cancel, and restore flows
 
 ## Quick Start
 
@@ -249,6 +251,20 @@ curl -X POST http://127.0.0.1:8000/v4/nodebalancers/4000/configs/1/nodes \
   -H "Authorization: Bearer $LINODE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"label":"web-1","address":"10.0.0.10:80"}'
+```
+
+Enable instance backups:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/linode/instances/1000/backups/enable \
+  -H "Authorization: Bearer $LINODE_TOKEN"
+```
+
+Create a manual backup snapshot:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/linode/instances/1000/backups \
+  -H "Authorization: Bearer $LINODE_TOKEN"
 ```
 
 Add a subnet to an existing VPC:

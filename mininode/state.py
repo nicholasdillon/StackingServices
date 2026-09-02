@@ -118,6 +118,7 @@ class ResourceStore:
     databases: dict[int, dict[str, Any]] = field(default_factory=dict)
     ssh_keys: dict[int, dict[str, Any]] = field(default_factory=dict)
     stackscripts: dict[int, dict[str, Any]] = field(default_factory=dict)
+    backups: dict[int, dict[str, Any]] = field(default_factory=dict)
     events: dict[int, dict[str, Any]] = field(default_factory=dict)
     buckets: dict[str, dict[str, Any]] = field(default_factory=dict)
     next_instance_id: count = field(default_factory=lambda: count(1000))
@@ -133,6 +134,7 @@ class ResourceStore:
     next_database_id: count = field(default_factory=lambda: count(8000))
     next_ssh_key_id: count = field(default_factory=lambda: count(8500))
     next_stackscript_id: count = field(default_factory=lambda: count(8750))
+    next_backup_id: count = field(default_factory=lambda: count(8900))
     next_event_id: count = field(default_factory=lambda: count(9000))
 
     def reset(self) -> None:
@@ -148,6 +150,7 @@ class ResourceStore:
         self.databases.clear()
         self.ssh_keys.clear()
         self.stackscripts.clear()
+        self.backups.clear()
         self.events.clear()
         self.buckets.clear()
         self.next_instance_id = count(1000)
@@ -163,6 +166,7 @@ class ResourceStore:
         self.next_database_id = count(8000)
         self.next_ssh_key_id = count(8500)
         self.next_stackscript_id = count(8750)
+        self.next_backup_id = count(8900)
         self.next_event_id = count(9000)
 
     def configure(self, state_path: str | None) -> None:
@@ -185,6 +189,7 @@ class ResourceStore:
         self.databases = {int(key): value for key, value in data.get("databases", {}).items()}
         self.ssh_keys = {int(key): value for key, value in data.get("ssh_keys", {}).items()}
         self.stackscripts = {int(key): value for key, value in data.get("stackscripts", {}).items()}
+        self.backups = {int(key): value for key, value in data.get("backups", {}).items()}
         self.events = {int(key): value for key, value in data.get("events", {}).items()}
         self.buckets = data.get("buckets", {})
         self.next_instance_id = count(data.get("next_instance_id", 1000))
@@ -200,6 +205,7 @@ class ResourceStore:
         self.next_database_id = count(data.get("next_database_id", 8000))
         self.next_ssh_key_id = count(data.get("next_ssh_key_id", 8500))
         self.next_stackscript_id = count(data.get("next_stackscript_id", 8750))
+        self.next_backup_id = count(data.get("next_backup_id", 8900))
         self.next_event_id = count(data.get("next_event_id", 9000))
 
     def save(self) -> None:
@@ -222,6 +228,7 @@ class ResourceStore:
                     "databases": self.databases,
                     "ssh_keys": self.ssh_keys,
                     "stackscripts": self.stackscripts,
+                    "backups": self.backups,
                     "events": self.events,
                     "buckets": self.buckets,
                     "next_instance_id": self.next_counter_value("next_instance_id"),
@@ -237,6 +244,7 @@ class ResourceStore:
                     "next_database_id": self.next_counter_value("next_database_id"),
                     "next_ssh_key_id": self.next_counter_value("next_ssh_key_id"),
                     "next_stackscript_id": self.next_counter_value("next_stackscript_id"),
+                    "next_backup_id": self.next_counter_value("next_backup_id"),
                     "next_event_id": self.next_counter_value("next_event_id"),
                 },
                 indent=2,
@@ -294,6 +302,7 @@ class ResourceStore:
 
     def create_instance(self, payload: dict[str, Any]) -> dict[str, Any]:
         instance_id = next(self.next_instance_id)
+        backup_state = {"enabled": False, "available": False, "schedule": None, "last_successful": None}
         instance = {
             "id": instance_id,
             "label": payload["label"],
@@ -310,12 +319,20 @@ class ResourceStore:
             "hypervisor": "kvm",
             "specs": next(item for item in TYPES if item["id"] == payload["type"]),
             "alerts": {"cpu": 90, "io": 10000, "network_in": 10, "network_out": 10, "transfer_quota": 80},
-            "backups": {"enabled": False, "available": False, "schedule": None, "last_successful": None},
+            "backups": backup_state,
             "authorized_keys": payload.get("authorized_keys", []),
             "created": NOW,
             "updated": NOW,
         }
         self.instances[instance_id] = instance
+        self.backups[instance_id] = {
+            "linode_id": instance_id,
+            "enabled": False,
+            "available": False,
+            "schedule": None,
+            "last_successful": None,
+            "snapshots": [],
+        }
         self.record_event("linode_create", self.entity_ref("linode", instance_id, instance["label"], f"/v4/linode/instances/{instance_id}"))
         self.persist()
         return clone(instance)
@@ -806,6 +823,52 @@ class ResourceStore:
         stackscript["updated"] = NOW
         self.persist()
 
+    def get_backup(self, instance_id: int) -> dict[str, Any]:
+        return self.backups[instance_id]
+
+    def enable_backups(self, instance_id: int) -> dict[str, Any]:
+        backup = self.backups[instance_id]
+        backup.update({"enabled": True, "available": True, "schedule": {"day": "Sunday", "window": "W22"}, "last_successful": NOW})
+        self.instances[instance_id]["backups"] = {"enabled": True, "available": True, "schedule": backup["schedule"], "last_successful": NOW}
+        self.record_event("linode_backups_enable", self.entity_ref("linode", instance_id, self.instances[instance_id]["label"], f"/v4/linode/instances/{instance_id}"))
+        self.persist()
+        return clone(backup)
+
+    def cancel_backups(self, instance_id: int) -> dict[str, Any]:
+        backup = self.backups[instance_id]
+        backup.update({"enabled": False, "available": False, "schedule": None})
+        self.instances[instance_id]["backups"] = {"enabled": False, "available": False, "schedule": None, "last_successful": backup["last_successful"]}
+        self.record_event("linode_backups_cancel", self.entity_ref("linode", instance_id, self.instances[instance_id]["label"], f"/v4/linode/instances/{instance_id}"))
+        self.persist()
+        return clone(backup)
+
+    def create_backup_snapshot(self, instance_id: int, label: str) -> dict[str, Any]:
+        backup = self.backups[instance_id]
+        snapshot_id = next(self.next_backup_id)
+        snapshot = {"id": snapshot_id, "label": label, "status": "successful", "type": "snapshot", "created": NOW, "updated": NOW}
+        backup["snapshots"].append(snapshot)
+        backup["available"] = True
+        backup["last_successful"] = NOW
+        self.instances[instance_id]["backups"]["available"] = True
+        self.instances[instance_id]["backups"]["last_successful"] = NOW
+        self.record_event("linode_snapshot_create", self.entity_ref("backup", snapshot_id, label, f"/v4/linode/instances/{instance_id}/backups/{snapshot_id}"), self.entity_ref("linode", instance_id, self.instances[instance_id]["label"], f"/v4/linode/instances/{instance_id}"))
+        self.persist()
+        return clone(snapshot)
+
+    def get_backup_snapshot(self, instance_id: int, backup_id: int) -> dict[str, Any]:
+        for snapshot in self.backups[instance_id].get("snapshots", []):
+            if snapshot["id"] == backup_id:
+                return snapshot
+        raise KeyError(backup_id)
+
+    def restore_backup_snapshot(self, instance_id: int, backup_id: int) -> dict[str, Any]:
+        snapshot = self.get_backup_snapshot(instance_id, backup_id)
+        self.instances[instance_id]["status"] = "running"
+        self.instances[instance_id]["updated"] = NOW
+        self.record_event("linode_restore", self.entity_ref("backup", backup_id, snapshot["label"], f"/v4/linode/instances/{instance_id}/backups/{backup_id}/restore"), self.entity_ref("linode", instance_id, self.instances[instance_id]["label"], f"/v4/linode/instances/{instance_id}"))
+        self.persist()
+        return clone(snapshot)
+
     def update_ssh_key(self, ssh_key_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         ssh_key = self.ssh_keys[ssh_key_id]
         ssh_key.update(updates)
@@ -840,6 +903,7 @@ class ResourceStore:
         instance = self.instances[instance_id]
         self.instance_disks = {disk_id: disk for disk_id, disk in self.instance_disks.items() if disk["linode_id"] != instance_id}
         self.instance_configs = {config_id: config for config_id, config in self.instance_configs.items() if config["linode_id"] != instance_id}
+        self.backups.pop(instance_id, None)
         del self.instances[instance_id]
         self.record_event("linode_delete", self.entity_ref("linode", instance_id, instance["label"], f"/v4/linode/instances/{instance_id}"))
         self.persist()

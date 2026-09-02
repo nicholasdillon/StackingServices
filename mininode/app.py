@@ -483,6 +483,22 @@ def get_nodebalancer_node_or_404(nodebalancer_id: int, config_id: int, node_id: 
         error_response("NodeBalancer node not found.", code=status.HTTP_404_NOT_FOUND)
 
 
+def get_backup_or_404(instance_id: int) -> dict[str, Any]:
+    get_instance_or_404(instance_id)
+    backup = store.backups.get(instance_id)
+    if not backup:
+        error_response("Backup service not found for Linode.", code=status.HTTP_404_NOT_FOUND)
+    return backup
+
+
+def get_backup_snapshot_or_404(instance_id: int, backup_id: int) -> dict[str, Any]:
+    get_backup_or_404(instance_id)
+    try:
+        return store.get_backup_snapshot(instance_id, backup_id)
+    except KeyError:
+        error_response("Backup not found.", code=status.HTTP_404_NOT_FOUND)
+
+
 def validate_database_create(payload: DatabaseCreate) -> None:
     if not store.region_exists(payload.region):
         error_response("Invalid region.", field="region")
@@ -771,6 +787,40 @@ async def shutdown_instance(instance_id: int, _: str = Depends(require_bearer_to
 async def reboot_instance(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
     get_instance_or_404(instance_id)
     return store.set_instance_status(instance_id, "running", "linode_reboot")
+
+
+@app.get("/v4/linode/instances/{instance_id}/backups")
+async def get_backups(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_backup_or_404(instance_id)
+
+
+@app.post("/v4/linode/instances/{instance_id}/backups/enable", status_code=status.HTTP_200_OK)
+async def enable_backups(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_backup_or_404(instance_id)
+    return store.enable_backups(instance_id)
+
+
+@app.post("/v4/linode/instances/{instance_id}/backups/cancel", status_code=status.HTTP_200_OK)
+async def cancel_backups(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_backup_or_404(instance_id)
+    return store.cancel_backups(instance_id)
+
+
+@app.post("/v4/linode/instances/{instance_id}/backups", status_code=status.HTTP_200_OK)
+async def create_backup(instance_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_backup_or_404(instance_id)
+    return store.create_backup_snapshot(instance_id, f"snapshot-{instance_id}-{len(store.backups[instance_id]['snapshots']) + 1}")
+
+
+@app.get("/v4/linode/instances/{instance_id}/backups/{backup_id}")
+async def get_backup_snapshot(instance_id: int, backup_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_backup_snapshot_or_404(instance_id, backup_id)
+
+
+@app.post("/v4/linode/instances/{instance_id}/backups/{backup_id}/restore", status_code=status.HTTP_200_OK)
+async def restore_backup(instance_id: int, backup_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_backup_snapshot_or_404(instance_id, backup_id)
+    return store.restore_backup_snapshot(instance_id, backup_id)
 
 
 @app.get("/v4/volumes")
