@@ -119,6 +119,7 @@ class ResourceStore:
     ssh_keys: dict[int, dict[str, Any]] = field(default_factory=dict)
     stackscripts: dict[int, dict[str, Any]] = field(default_factory=dict)
     backups: dict[int, dict[str, Any]] = field(default_factory=dict)
+    vlans: dict[int, dict[str, Any]] = field(default_factory=dict)
     events: dict[int, dict[str, Any]] = field(default_factory=dict)
     buckets: dict[str, dict[str, Any]] = field(default_factory=dict)
     next_instance_id: count = field(default_factory=lambda: count(1000))
@@ -135,6 +136,7 @@ class ResourceStore:
     next_ssh_key_id: count = field(default_factory=lambda: count(8500))
     next_stackscript_id: count = field(default_factory=lambda: count(8750))
     next_backup_id: count = field(default_factory=lambda: count(8900))
+    next_vlan_id: count = field(default_factory=lambda: count(8950))
     next_event_id: count = field(default_factory=lambda: count(9000))
 
     def reset(self) -> None:
@@ -151,6 +153,7 @@ class ResourceStore:
         self.ssh_keys.clear()
         self.stackscripts.clear()
         self.backups.clear()
+        self.vlans.clear()
         self.events.clear()
         self.buckets.clear()
         self.next_instance_id = count(1000)
@@ -167,6 +170,7 @@ class ResourceStore:
         self.next_ssh_key_id = count(8500)
         self.next_stackscript_id = count(8750)
         self.next_backup_id = count(8900)
+        self.next_vlan_id = count(8950)
         self.next_event_id = count(9000)
 
     def configure(self, state_path: str | None) -> None:
@@ -190,6 +194,7 @@ class ResourceStore:
         self.ssh_keys = {int(key): value for key, value in data.get("ssh_keys", {}).items()}
         self.stackscripts = {int(key): value for key, value in data.get("stackscripts", {}).items()}
         self.backups = {int(key): value for key, value in data.get("backups", {}).items()}
+        self.vlans = {int(key): value for key, value in data.get("vlans", {}).items()}
         self.events = {int(key): value for key, value in data.get("events", {}).items()}
         self.buckets = data.get("buckets", {})
         self.next_instance_id = count(data.get("next_instance_id", 1000))
@@ -206,6 +211,7 @@ class ResourceStore:
         self.next_ssh_key_id = count(data.get("next_ssh_key_id", 8500))
         self.next_stackscript_id = count(data.get("next_stackscript_id", 8750))
         self.next_backup_id = count(data.get("next_backup_id", 8900))
+        self.next_vlan_id = count(data.get("next_vlan_id", 8950))
         self.next_event_id = count(data.get("next_event_id", 9000))
 
     def save(self) -> None:
@@ -229,6 +235,7 @@ class ResourceStore:
                     "ssh_keys": self.ssh_keys,
                     "stackscripts": self.stackscripts,
                     "backups": self.backups,
+                    "vlans": self.vlans,
                     "events": self.events,
                     "buckets": self.buckets,
                     "next_instance_id": self.next_counter_value("next_instance_id"),
@@ -245,6 +252,7 @@ class ResourceStore:
                     "next_ssh_key_id": self.next_counter_value("next_ssh_key_id"),
                     "next_stackscript_id": self.next_counter_value("next_stackscript_id"),
                     "next_backup_id": self.next_counter_value("next_backup_id"),
+                    "next_vlan_id": self.next_counter_value("next_vlan_id"),
                     "next_event_id": self.next_counter_value("next_event_id"),
                 },
                 indent=2,
@@ -868,6 +876,60 @@ class ResourceStore:
         self.record_event("linode_restore", self.entity_ref("backup", backup_id, snapshot["label"], f"/v4/linode/instances/{instance_id}/backups/{backup_id}/restore"), self.entity_ref("linode", instance_id, self.instances[instance_id]["label"], f"/v4/linode/instances/{instance_id}"))
         self.persist()
         return clone(snapshot)
+
+    def create_vlan(self, payload: dict[str, Any]) -> dict[str, Any]:
+        vlan_id = next(self.next_vlan_id)
+        vlan = {
+            "id": vlan_id,
+            "label": payload["label"],
+            "region": payload["region"],
+            "description": payload.get("description", ""),
+            "linodes": [],
+            "created": NOW,
+            "updated": NOW,
+        }
+        self.vlans[vlan_id] = vlan
+        self.record_event("vlan_create", self.entity_ref("vlan", vlan_id, vlan["label"], f"/v4/networking/vlans/{vlan_id}"))
+        self.persist()
+        return clone(vlan)
+
+    def update_vlan(self, vlan_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        vlan = self.vlans[vlan_id]
+        vlan.update(updates)
+        vlan["updated"] = NOW
+        self.record_event("vlan_update", self.entity_ref("vlan", vlan_id, vlan["label"], f"/v4/networking/vlans/{vlan_id}"))
+        self.persist()
+        return clone(vlan)
+
+    def attach_instance_to_vlan(self, instance_id: int, vlan_id: int, ipam_address: str | None = None) -> dict[str, Any]:
+        instance = self.instances[instance_id]
+        vlan = self.vlans[vlan_id]
+        interface = {
+            "id": len(instance.get("interfaces", [])) + 1,
+            "purpose": "vlan",
+            "label": vlan["label"],
+            "vlan_id": vlan_id,
+            "ipam_address": ipam_address,
+            "active": True,
+        }
+        instance.setdefault("interfaces", []).append(interface)
+        if instance_id not in vlan["linodes"]:
+            vlan["linodes"].append(instance_id)
+        instance["updated"] = NOW
+        vlan["updated"] = NOW
+        self.record_event("vlan_attach", self.entity_ref("vlan", vlan_id, vlan["label"], f"/v4/networking/vlans/{vlan_id}"), self.entity_ref("linode", instance_id, instance["label"], f"/v4/linode/instances/{instance_id}"))
+        self.persist()
+        return clone(interface)
+
+    def detach_instance_from_vlan(self, instance_id: int, vlan_id: int) -> None:
+        instance = self.instances[instance_id]
+        vlan = self.vlans[vlan_id]
+        instance["interfaces"] = [item for item in instance.get("interfaces", []) if item.get("vlan_id") != vlan_id]
+        vlan["linodes"] = [linode_id for linode_id in vlan.get("linodes", []) if linode_id != instance_id]
+        instance["updated"] = NOW
+        vlan["updated"] = NOW
+        self.record_event("vlan_detach", self.entity_ref("vlan", vlan_id, vlan["label"], f"/v4/networking/vlans/{vlan_id}"), self.entity_ref("linode", instance_id, instance["label"], f"/v4/linode/instances/{instance_id}"))
+        self.persist()
 
     def update_ssh_key(self, ssh_key_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         ssh_key = self.ssh_keys[ssh_key_id]

@@ -21,6 +21,7 @@ It is intentionally narrower than MiniStack's AWS coverage. This MVP focuses on 
 - `nodebalancers/{id}/configs`
 - `nodebalancers/{id}/configs/{config_id}/nodes`
 - `linode/instances/{id}/backups`
+- `networking/vlans`
 - `object-storage/buckets`
 - catalog endpoints such as `regions`, `types`, and `images`
 
@@ -47,6 +48,7 @@ Optional persistence is available through `MININODE_STATE_PATH`.
 - StackScript resources and instance linkage
 - Nested NodeBalancer configs and backend nodes
 - Instance backup enable, snapshot, cancel, and restore flows
+- VLAN resources and instance attachments
 
 ## Quick Start
 
@@ -265,6 +267,24 @@ Create a manual backup snapshot:
 ```bash
 curl -X POST http://127.0.0.1:8000/v4/linode/instances/1000/backups \
   -H "Authorization: Bearer $LINODE_TOKEN"
+```
+
+Create a VLAN:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/networking/vlans \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"private-vlan","region":"us-east"}'
+```
+
+Attach an instance to a VLAN:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/networking/vlans/8950/attach \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"linode_id":1000,"ipam_address":"10.20.0.10/24"}'
 ```
 
 Add a subnet to an existing VPC:

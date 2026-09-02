@@ -314,6 +314,22 @@ class NodeBalancerNodeUpdate(BaseModel):
     status: str | None = None
 
 
+class VlanCreate(BaseModel):
+    label: str = Field(min_length=1)
+    region: str
+    description: str | None = None
+
+
+class VlanUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+
+
+class VlanAttach(BaseModel):
+    linode_id: int
+    ipam_address: str | None = None
+
+
 def parse_filter(filter_value: str | None) -> dict[str, Any]:
     if not filter_value:
         return {}
@@ -499,6 +515,13 @@ def get_backup_snapshot_or_404(instance_id: int, backup_id: int) -> dict[str, An
         error_response("Backup not found.", code=status.HTTP_404_NOT_FOUND)
 
 
+def get_vlan_or_404(vlan_id: int) -> dict[str, Any]:
+    vlan = store.vlans.get(vlan_id)
+    if not vlan:
+        error_response("VLAN not found.", code=status.HTTP_404_NOT_FOUND)
+    return vlan
+
+
 def validate_database_create(payload: DatabaseCreate) -> None:
     if not store.region_exists(payload.region):
         error_response("Invalid region.", field="region")
@@ -518,6 +541,11 @@ def validate_instance_keys(authorized_keys: list[str]) -> None:
 def validate_instance_stackscript(stackscript_id: int | None) -> None:
     if stackscript_id is not None and stackscript_id not in store.stackscripts:
         error_response("StackScript not found.", field="stackscript_id", code=status.HTTP_404_NOT_FOUND)
+
+
+def validate_vlan_create(payload: VlanCreate) -> None:
+    if not store.region_exists(payload.region):
+        error_response("Invalid region.", field="region")
 
 
 def get_subnet_or_404(vpc_id: int, subnet_id: int) -> dict[str, Any]:
@@ -562,6 +590,8 @@ async def health() -> dict[str, Any]:
             "databases": len(store.databases),
             "ssh_keys": len(store.ssh_keys),
             "stackscripts": len(store.stackscripts),
+            "backups": len(store.backups),
+            "vlans": len(store.vlans),
             "events": len(store.events),
             "buckets": len(store.buckets),
         },
@@ -1077,6 +1107,51 @@ async def delete_firewall(firewall_id: int, _: str = Depends(require_bearer_toke
     get_firewall_or_404(firewall_id)
     store.delete_firewall(firewall_id)
     return {"deleted": str(firewall_id)}
+
+
+@app.get("/v4/networking/vlans")
+async def list_vlans(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
+    _: str = Depends(require_bearer_token),
+) -> dict[str, Any]:
+    items = apply_order(apply_filter(list(store.vlans.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
+
+
+@app.post("/v4/networking/vlans", status_code=status.HTTP_200_OK)
+async def create_vlan(payload: VlanCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    validate_vlan_create(payload)
+    return store.create_vlan(payload.model_dump(exclude_none=True))
+
+
+@app.get("/v4/networking/vlans/{vlan_id}")
+async def get_vlan(vlan_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_vlan_or_404(vlan_id)
+
+
+@app.put("/v4/networking/vlans/{vlan_id}")
+async def update_vlan(vlan_id: int, payload: VlanUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_vlan_or_404(vlan_id)
+    return store.update_vlan(vlan_id, payload.model_dump(exclude_none=True))
+
+
+@app.post("/v4/networking/vlans/{vlan_id}/attach", status_code=status.HTTP_200_OK)
+async def attach_vlan(vlan_id: int, payload: VlanAttach, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_vlan_or_404(vlan_id)
+    get_instance_or_404(payload.linode_id)
+    return store.attach_instance_to_vlan(payload.linode_id, vlan_id, payload.ipam_address)
+
+
+@app.post("/v4/networking/vlans/{vlan_id}/detach", status_code=status.HTTP_200_OK)
+async def detach_vlan(vlan_id: int, payload: VlanAttach, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_vlan_or_404(vlan_id)
+    get_instance_or_404(payload.linode_id)
+    store.detach_instance_from_vlan(payload.linode_id, vlan_id)
+    return {"detached": str(payload.linode_id)}
 
 
 @app.get("/v4/domains")

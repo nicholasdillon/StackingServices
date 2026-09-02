@@ -589,6 +589,47 @@ def test_instance_backup_lifecycle() -> None:
     assert cancelled.json()["enabled"] is False
 
 
+def test_vlan_lifecycle_and_instance_attachment() -> None:
+    instance = client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "vlan-node",
+            "region": "us-east",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+        },
+    ).json()
+
+    vlan = client.post(
+        "/v4/networking/vlans",
+        headers=AUTH,
+        json={"label": "private-vlan", "region": "us-east", "description": "east private network"},
+    )
+    assert vlan.status_code == 200
+    vlan_id = vlan.json()["id"]
+
+    attached = client.post(
+        f"/v4/networking/vlans/{vlan_id}/attach",
+        headers=AUTH,
+        json={"linode_id": instance["id"], "ipam_address": "10.20.0.10/24"},
+    )
+    assert attached.status_code == 200
+    assert attached.json()["vlan_id"] == vlan_id
+
+    fetched_vlan = client.get(f"/v4/networking/vlans/{vlan_id}", headers=AUTH)
+    assert fetched_vlan.status_code == 200
+    assert fetched_vlan.json()["linodes"] == [instance["id"]]
+
+    detached = client.post(
+        f"/v4/networking/vlans/{vlan_id}/detach",
+        headers=AUTH,
+        json={"linode_id": instance["id"]},
+    )
+    assert detached.status_code == 200
+    assert detached.json()["detached"] == str(instance["id"])
+
+
 def test_store_persistence(tmp_path: Path) -> None:
     state_file = tmp_path / "state.json"
     store.configure(str(state_file))
