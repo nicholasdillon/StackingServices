@@ -401,6 +401,55 @@ def test_database_lifecycle() -> None:
     assert events.json()["results"] == 1
 
 
+def test_ssh_keys_and_instance_authorized_keys() -> None:
+    key = client.post(
+        "/v4/profile/sshkeys",
+        headers=AUTH,
+        json={"label": "laptop", "ssh_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey user@example"},
+    )
+    assert key.status_code == 200
+    ssh_key = key.json()
+
+    listed = client.get("/v4/profile/sshkeys", headers=AUTH)
+    assert listed.status_code == 200
+    assert listed.json()["results"] == 1
+
+    updated = client.put(
+        f"/v4/profile/sshkeys/{ssh_key['id']}",
+        headers=AUTH,
+        json={"label": "work-laptop"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["label"] == "work-laptop"
+
+    instance = client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "ssh-node",
+            "region": "us-east",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+            "authorized_keys": [ssh_key["ssh_key"]],
+        },
+    )
+    assert instance.status_code == 200
+    assert instance.json()["authorized_keys"] == [ssh_key["ssh_key"]]
+
+    missing = client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "bad-node",
+            "region": "us-east",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+            "authorized_keys": ["ssh-ed25519 missing"],
+        },
+    )
+    assert missing.status_code == 404
+
+
 def test_store_persistence(tmp_path: Path) -> None:
     state_file = tmp_path / "state.json"
     store.configure(str(state_file))

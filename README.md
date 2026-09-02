@@ -16,6 +16,7 @@ It is intentionally narrower than MiniStack's AWS coverage. This MVP focuses on 
 - `databases/engines`
 - `databases/types`
 - `databases/instances`
+- `profile/sshkeys`
 - `object-storage/buckets`
 - catalog endpoints such as `regions`, `types`, and `images`
 
@@ -38,6 +39,7 @@ Optional persistence is available through `MININODE_STATE_PATH`.
 - Account event history for control-plane operations
 - Domain and DNS record resources
 - Managed database resources with credentials and reset operations
+- Account SSH key resources and instance authorized key validation
 
 ## Quick Start
 
@@ -202,6 +204,15 @@ Reset database credentials:
 ```bash
 curl -X POST http://127.0.0.1:8000/v4/databases/instances/8000/credentials/reset \
   -H "Authorization: Bearer $LINODE_TOKEN"
+```
+
+Create an SSH key:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/profile/sshkeys \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"laptop","ssh_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey user@example"}'
 ```
 
 Add a subnet to an existing VPC:

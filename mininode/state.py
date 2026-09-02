@@ -116,6 +116,7 @@ class ResourceStore:
     domains: dict[int, dict[str, Any]] = field(default_factory=dict)
     domain_records: dict[int, dict[str, Any]] = field(default_factory=dict)
     databases: dict[int, dict[str, Any]] = field(default_factory=dict)
+    ssh_keys: dict[int, dict[str, Any]] = field(default_factory=dict)
     events: dict[int, dict[str, Any]] = field(default_factory=dict)
     buckets: dict[str, dict[str, Any]] = field(default_factory=dict)
     next_instance_id: count = field(default_factory=lambda: count(1000))
@@ -129,6 +130,7 @@ class ResourceStore:
     next_domain_id: count = field(default_factory=lambda: count(6000))
     next_domain_record_id: count = field(default_factory=lambda: count(7000))
     next_database_id: count = field(default_factory=lambda: count(8000))
+    next_ssh_key_id: count = field(default_factory=lambda: count(8500))
     next_event_id: count = field(default_factory=lambda: count(9000))
 
     def reset(self) -> None:
@@ -142,6 +144,7 @@ class ResourceStore:
         self.domains.clear()
         self.domain_records.clear()
         self.databases.clear()
+        self.ssh_keys.clear()
         self.events.clear()
         self.buckets.clear()
         self.next_instance_id = count(1000)
@@ -155,6 +158,7 @@ class ResourceStore:
         self.next_domain_id = count(6000)
         self.next_domain_record_id = count(7000)
         self.next_database_id = count(8000)
+        self.next_ssh_key_id = count(8500)
         self.next_event_id = count(9000)
 
     def configure(self, state_path: str | None) -> None:
@@ -175,6 +179,7 @@ class ResourceStore:
         self.domains = {int(key): value for key, value in data.get("domains", {}).items()}
         self.domain_records = {int(key): value for key, value in data.get("domain_records", {}).items()}
         self.databases = {int(key): value for key, value in data.get("databases", {}).items()}
+        self.ssh_keys = {int(key): value for key, value in data.get("ssh_keys", {}).items()}
         self.events = {int(key): value for key, value in data.get("events", {}).items()}
         self.buckets = data.get("buckets", {})
         self.next_instance_id = count(data.get("next_instance_id", 1000))
@@ -188,6 +193,7 @@ class ResourceStore:
         self.next_domain_id = count(data.get("next_domain_id", 6000))
         self.next_domain_record_id = count(data.get("next_domain_record_id", 7000))
         self.next_database_id = count(data.get("next_database_id", 8000))
+        self.next_ssh_key_id = count(data.get("next_ssh_key_id", 8500))
         self.next_event_id = count(data.get("next_event_id", 9000))
 
     def save(self) -> None:
@@ -208,6 +214,7 @@ class ResourceStore:
                     "domains": self.domains,
                     "domain_records": self.domain_records,
                     "databases": self.databases,
+                    "ssh_keys": self.ssh_keys,
                     "events": self.events,
                     "buckets": self.buckets,
                     "next_instance_id": self.next_counter_value("next_instance_id"),
@@ -221,6 +228,7 @@ class ResourceStore:
                     "next_domain_id": self.next_counter_value("next_domain_id"),
                     "next_domain_record_id": self.next_counter_value("next_domain_record_id"),
                     "next_database_id": self.next_counter_value("next_database_id"),
+                    "next_ssh_key_id": self.next_counter_value("next_ssh_key_id"),
                     "next_event_id": self.next_counter_value("next_event_id"),
                 },
                 indent=2,
@@ -293,6 +301,7 @@ class ResourceStore:
             "specs": next(item for item in TYPES if item["id"] == payload["type"]),
             "alerts": {"cpu": 90, "io": 10000, "network_in": 10, "network_out": 10, "transfer_quota": 80},
             "backups": {"enabled": False, "available": False, "schedule": None, "last_successful": None},
+            "authorized_keys": payload.get("authorized_keys", []),
             "created": NOW,
             "updated": NOW,
         }
@@ -652,6 +661,26 @@ class ResourceStore:
         self.persist()
         return clone(database)
 
+    def create_ssh_key(self, payload: dict[str, Any]) -> dict[str, Any]:
+        ssh_key_id = next(self.next_ssh_key_id)
+        ssh_key = {
+            "id": ssh_key_id,
+            "label": payload["label"],
+            "ssh_key": payload["ssh_key"],
+            "created": NOW,
+        }
+        self.ssh_keys[ssh_key_id] = ssh_key
+        self.record_event("sshkey_create", self.entity_ref("ssh_key", ssh_key_id, ssh_key["label"], f"/v4/profile/sshkeys/{ssh_key_id}"))
+        self.persist()
+        return clone(ssh_key)
+
+    def update_ssh_key(self, ssh_key_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        ssh_key = self.ssh_keys[ssh_key_id]
+        ssh_key.update(updates)
+        self.record_event("sshkey_update", self.entity_ref("ssh_key", ssh_key_id, ssh_key["label"], f"/v4/profile/sshkeys/{ssh_key_id}"))
+        self.persist()
+        return clone(ssh_key)
+
     def update_database(self, database_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         database = self.databases[database_id]
         database.update(updates)
@@ -736,6 +765,12 @@ class ResourceStore:
         database = self.databases[database_id]
         del self.databases[database_id]
         self.record_event("database_delete", self.entity_ref("database", database_id, database["label"], f"/v4/databases/instances/{database_id}"))
+        self.persist()
+
+    def delete_ssh_key(self, ssh_key_id: int) -> None:
+        ssh_key = self.ssh_keys[ssh_key_id]
+        del self.ssh_keys[ssh_key_id]
+        self.record_event("sshkey_delete", self.entity_ref("ssh_key", ssh_key_id, ssh_key["label"], f"/v4/profile/sshkeys/{ssh_key_id}"))
         self.persist()
 
     def delete_bucket(self, key: str) -> None:

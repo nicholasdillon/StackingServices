@@ -57,6 +57,7 @@ class InstanceCreate(BaseModel):
     image: str | None = None
     group: str | None = None
     tags: list[str] = Field(default_factory=list)
+    authorized_keys: list[str] = Field(default_factory=list)
 
 
 class VolumeCreate(BaseModel):
@@ -237,6 +238,15 @@ class DatabaseUpdate(BaseModel):
     cluster_size: int | None = Field(default=None, ge=1)
 
 
+class SshKeyCreate(BaseModel):
+    label: str = Field(min_length=1)
+    ssh_key: str = Field(min_length=1)
+
+
+class SshKeyUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+
+
 def parse_filter(filter_value: str | None) -> dict[str, Any]:
     if not filter_value:
         return {}
@@ -376,6 +386,13 @@ def get_database_or_404(database_id: int) -> dict[str, Any]:
     return database
 
 
+def get_ssh_key_or_404(ssh_key_id: int) -> dict[str, Any]:
+    ssh_key = store.ssh_keys.get(ssh_key_id)
+    if not ssh_key:
+        error_response("SSH key not found.", code=status.HTTP_404_NOT_FOUND)
+    return ssh_key
+
+
 def validate_database_create(payload: DatabaseCreate) -> None:
     if not store.region_exists(payload.region):
         error_response("Invalid region.", field="region")
@@ -383,6 +400,13 @@ def validate_database_create(payload: DatabaseCreate) -> None:
         error_response("Invalid database engine.", field="engine")
     if not store.database_type_exists(payload.type):
         error_response("Invalid database type.", field="type")
+
+
+def validate_instance_keys(authorized_keys: list[str]) -> None:
+    known_keys = {item["ssh_key"] for item in store.ssh_keys.values()}
+    for key in authorized_keys:
+        if key not in known_keys:
+            error_response("SSH key not found in profile.", field="authorized_keys", code=status.HTTP_404_NOT_FOUND)
 
 
 def get_subnet_or_404(vpc_id: int, subnet_id: int) -> dict[str, Any]:
@@ -425,6 +449,7 @@ async def health() -> dict[str, Any]:
             "domains": len(store.domains),
             "domain_records": len(store.domain_records),
             "databases": len(store.databases),
+            "ssh_keys": len(store.ssh_keys),
             "events": len(store.events),
             "buckets": len(store.buckets),
         },
@@ -544,6 +569,7 @@ async def list_instances(
 @app.post("/v4/linode/instances", status_code=status.HTTP_200_OK)
 async def create_instance(payload: InstanceCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
     validate_instance_create(payload)
+    validate_instance_keys(payload.authorized_keys)
     return store.create_instance(payload.model_dump())
 
 
@@ -982,6 +1008,42 @@ async def delete_database(database_id: int, _: str = Depends(require_bearer_toke
     get_database_or_404(database_id)
     store.delete_database(database_id)
     return {"deleted": str(database_id)}
+
+
+@app.get("/v4/profile/sshkeys")
+async def list_ssh_keys(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
+    _: str = Depends(require_bearer_token),
+) -> dict[str, Any]:
+    items = apply_order(apply_filter(list(store.ssh_keys.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
+
+
+@app.post("/v4/profile/sshkeys", status_code=status.HTTP_200_OK)
+async def create_ssh_key(payload: SshKeyCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return store.create_ssh_key(payload.model_dump())
+
+
+@app.get("/v4/profile/sshkeys/{ssh_key_id}")
+async def get_ssh_key(ssh_key_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_ssh_key_or_404(ssh_key_id)
+
+
+@app.put("/v4/profile/sshkeys/{ssh_key_id}")
+async def update_ssh_key(ssh_key_id: int, payload: SshKeyUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_ssh_key_or_404(ssh_key_id)
+    return store.update_ssh_key(ssh_key_id, payload.model_dump(exclude_none=True))
+
+
+@app.delete("/v4/profile/sshkeys/{ssh_key_id}", status_code=status.HTTP_200_OK)
+async def delete_ssh_key(ssh_key_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_ssh_key_or_404(ssh_key_id)
+    store.delete_ssh_key(ssh_key_id)
+    return {"deleted": str(ssh_key_id)}
 
 
 @app.get("/v4/object-storage/buckets")
