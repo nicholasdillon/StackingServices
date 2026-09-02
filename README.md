@@ -8,6 +8,7 @@ It is intentionally narrower than MiniStack's AWS coverage. This MVP focuses on 
 - `volumes`
 - `vpcs`
 - `nodebalancers`
+- `networking/firewalls`
 - `object-storage/buckets`
 - catalog endpoints such as `regions`, `types`, and `images`
 
@@ -25,6 +26,7 @@ Optional persistence is available through `MININODE_STATE_PATH`.
 - Optional JSON persistence across restarts
 - Basic Linode-style `+filter`, `+order_by`, and `+order` support on list endpoints
 - `PUT` update endpoints for core mutable resources
+- Nested VPC subnet endpoints and basic firewall resources
 
 ## Quick Start
 
@@ -105,6 +107,31 @@ curl -X POST http://127.0.0.1:8000/v4/object-storage/buckets \
     "cluster": "us-east-1",
     "region": "us-east"
   }'
+```
+
+Create a firewall:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/networking/firewalls \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label": "edge-fw",
+    "linodes": [1000],
+    "rules": {
+      "inbound": [{"action":"ACCEPT","ports":"80","protocol":"TCP","addresses":{"ipv4":["0.0.0.0/0"]}}],
+      "outbound": []
+    }
+  }'
+```
+
+Add a subnet to an existing VPC:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/vpcs/3000/subnets \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"private-a","ipv4":"10.10.0.0/24"}'
 ```
 
 Reset emulator state:

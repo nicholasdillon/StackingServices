@@ -119,6 +119,25 @@ class NodeBalancerUpdate(BaseModel):
     tags: list[str] | None = None
 
 
+class FirewallRules(BaseModel):
+    inbound: list[dict[str, Any]] = Field(default_factory=list)
+    outbound: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FirewallCreate(BaseModel):
+    label: str = Field(min_length=1)
+    tags: list[str] = Field(default_factory=list)
+    linodes: list[int] = Field(default_factory=list)
+    rules: FirewallRules = Field(default_factory=FirewallRules)
+
+
+class FirewallUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    tags: list[str] | None = None
+    linodes: list[int] | None = None
+    rules: FirewallRules | None = None
+
+
 def parse_filter(filter_value: str | None) -> dict[str, Any]:
     if not filter_value:
         return {}
@@ -213,6 +232,27 @@ def get_nodebalancer_or_404(nodebalancer_id: int) -> dict[str, Any]:
     return nodebalancer
 
 
+def get_firewall_or_404(firewall_id: int) -> dict[str, Any]:
+    firewall = store.firewalls.get(firewall_id)
+    if not firewall:
+        error_response("Firewall not found.", code=status.HTTP_404_NOT_FOUND)
+    return firewall
+
+
+def get_subnet_or_404(vpc_id: int, subnet_id: int) -> dict[str, Any]:
+    get_vpc_or_404(vpc_id)
+    try:
+        return store.get_subnet(vpc_id, subnet_id)
+    except KeyError:
+        error_response("VPC subnet not found.", code=status.HTTP_404_NOT_FOUND)
+
+
+def validate_firewall_linodes(linode_ids: list[int]) -> None:
+    for linode_id in linode_ids:
+        if linode_id not in store.instances:
+            error_response("Linode not found.", field="linodes", code=status.HTTP_404_NOT_FOUND)
+
+
 @app.get("/")
 async def root() -> dict[str, Any]:
     return {
@@ -233,6 +273,7 @@ async def health() -> dict[str, Any]:
             "volumes": len(store.volumes),
             "vpcs": len(store.vpcs),
             "nodebalancers": len(store.nodebalancers),
+            "firewalls": len(store.firewalls),
             "buckets": len(store.buckets),
         },
     }
@@ -464,6 +505,35 @@ async def update_vpc(vpc_id: int, payload: VpcUpdate, _: str = Depends(require_b
     return store.update_vpc(vpc_id, updates)
 
 
+@app.get("/v4/vpcs/{vpc_id}/subnets")
+async def list_vpc_subnets(vpc_id: int, _: str = Depends(require_bearer_token)) -> list[dict[str, Any]]:
+    return get_vpc_or_404(vpc_id).get("subnets", [])
+
+
+@app.post("/v4/vpcs/{vpc_id}/subnets", status_code=status.HTTP_200_OK)
+async def create_vpc_subnet(vpc_id: int, payload: VpcSubnet, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_vpc_or_404(vpc_id)
+    return store.create_subnet(vpc_id, payload.model_dump())
+
+
+@app.get("/v4/vpcs/{vpc_id}/subnets/{subnet_id}")
+async def get_vpc_subnet(vpc_id: int, subnet_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_subnet_or_404(vpc_id, subnet_id)
+
+
+@app.put("/v4/vpcs/{vpc_id}/subnets/{subnet_id}")
+async def update_vpc_subnet(vpc_id: int, subnet_id: int, payload: VpcSubnet, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_subnet_or_404(vpc_id, subnet_id)
+    return store.update_subnet(vpc_id, subnet_id, payload.model_dump())
+
+
+@app.delete("/v4/vpcs/{vpc_id}/subnets/{subnet_id}", status_code=status.HTTP_200_OK)
+async def delete_vpc_subnet(vpc_id: int, subnet_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_subnet_or_404(vpc_id, subnet_id)
+    store.delete_subnet(vpc_id, subnet_id)
+    return {"deleted": str(subnet_id)}
+
+
 @app.delete("/v4/vpcs/{vpc_id}", status_code=status.HTTP_200_OK)
 async def delete_vpc(vpc_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
     get_vpc_or_404(vpc_id)
@@ -507,6 +577,46 @@ async def delete_nodebalancer(nodebalancer_id: int, _: str = Depends(require_bea
     get_nodebalancer_or_404(nodebalancer_id)
     store.delete_nodebalancer(nodebalancer_id)
     return {"deleted": str(nodebalancer_id)}
+
+
+@app.get("/v4/networking/firewalls")
+async def list_firewalls(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
+    _: str = Depends(require_bearer_token),
+) -> dict[str, Any]:
+    items = apply_order(apply_filter(list(store.firewalls.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
+
+
+@app.post("/v4/networking/firewalls", status_code=status.HTTP_200_OK)
+async def create_firewall(payload: FirewallCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    validate_firewall_linodes(payload.linodes)
+    return store.create_firewall(payload.model_dump())
+
+
+@app.get("/v4/networking/firewalls/{firewall_id}")
+async def get_firewall(firewall_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_firewall_or_404(firewall_id)
+
+
+@app.put("/v4/networking/firewalls/{firewall_id}")
+async def update_firewall(firewall_id: int, payload: FirewallUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_firewall_or_404(firewall_id)
+    updates = payload.model_dump(exclude_none=True)
+    if "linodes" in updates:
+        validate_firewall_linodes(updates["linodes"])
+    return store.update_firewall(firewall_id, updates)
+
+
+@app.delete("/v4/networking/firewalls/{firewall_id}", status_code=status.HTTP_200_OK)
+async def delete_firewall(firewall_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_firewall_or_404(firewall_id)
+    store.delete_firewall(firewall_id)
+    return {"deleted": str(firewall_id)}
 
 
 @app.get("/v4/object-storage/buckets")

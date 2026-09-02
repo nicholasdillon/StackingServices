@@ -98,22 +98,28 @@ class ResourceStore:
     volumes: dict[int, dict[str, Any]] = field(default_factory=dict)
     vpcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     nodebalancers: dict[int, dict[str, Any]] = field(default_factory=dict)
+    firewalls: dict[int, dict[str, Any]] = field(default_factory=dict)
     buckets: dict[str, dict[str, Any]] = field(default_factory=dict)
     next_instance_id: count = field(default_factory=lambda: count(1000))
     next_volume_id: count = field(default_factory=lambda: count(2000))
     next_vpc_id: count = field(default_factory=lambda: count(3000))
+    next_subnet_id: count = field(default_factory=lambda: count(3500))
     next_nodebalancer_id: count = field(default_factory=lambda: count(4000))
+    next_firewall_id: count = field(default_factory=lambda: count(5000))
 
     def reset(self) -> None:
         self.instances.clear()
         self.volumes.clear()
         self.vpcs.clear()
         self.nodebalancers.clear()
+        self.firewalls.clear()
         self.buckets.clear()
         self.next_instance_id = count(1000)
         self.next_volume_id = count(2000)
         self.next_vpc_id = count(3000)
+        self.next_subnet_id = count(3500)
         self.next_nodebalancer_id = count(4000)
+        self.next_firewall_id = count(5000)
 
     def configure(self, state_path: str | None) -> None:
         self.state_path = Path(state_path) if state_path else None
@@ -127,11 +133,14 @@ class ResourceStore:
         self.volumes = {int(key): value for key, value in data.get("volumes", {}).items()}
         self.vpcs = {int(key): value for key, value in data.get("vpcs", {}).items()}
         self.nodebalancers = {int(key): value for key, value in data.get("nodebalancers", {}).items()}
+        self.firewalls = {int(key): value for key, value in data.get("firewalls", {}).items()}
         self.buckets = data.get("buckets", {})
         self.next_instance_id = count(data.get("next_instance_id", 1000))
         self.next_volume_id = count(data.get("next_volume_id", 2000))
         self.next_vpc_id = count(data.get("next_vpc_id", 3000))
+        self.next_subnet_id = count(data.get("next_subnet_id", 3500))
         self.next_nodebalancer_id = count(data.get("next_nodebalancer_id", 4000))
+        self.next_firewall_id = count(data.get("next_firewall_id", 5000))
 
     def save(self) -> None:
         if not self.state_path:
@@ -145,11 +154,14 @@ class ResourceStore:
                     "volumes": self.volumes,
                     "vpcs": self.vpcs,
                     "nodebalancers": self.nodebalancers,
+                    "firewalls": self.firewalls,
                     "buckets": self.buckets,
                     "next_instance_id": self.next_counter_value("next_instance_id"),
                     "next_volume_id": self.next_counter_value("next_volume_id"),
                     "next_vpc_id": self.next_counter_value("next_vpc_id"),
+                    "next_subnet_id": self.next_counter_value("next_subnet_id"),
                     "next_nodebalancer_id": self.next_counter_value("next_nodebalancer_id"),
+                    "next_firewall_id": self.next_counter_value("next_firewall_id"),
                 },
                 indent=2,
                 sort_keys=True,
@@ -246,7 +258,7 @@ class ResourceStore:
             "label": payload["label"],
             "region": payload["region"],
             "description": payload.get("description", ""),
-            "subnets": payload.get("subnets", []),
+            "subnets": [self.build_subnet(subnet) for subnet in payload.get("subnets", [])],
             "created": "2026-09-02T00:00:00",
             "updated": "2026-09-02T00:00:00",
         }
@@ -256,9 +268,45 @@ class ResourceStore:
 
     def update_vpc(self, vpc_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         vpc = self.vpcs[vpc_id]
+        if "subnets" in updates:
+            updates["subnets"] = [self.build_subnet(subnet) for subnet in updates["subnets"]]
         vpc.update(updates)
         self.persist()
         return clone(vpc)
+
+    def build_subnet(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": next(self.next_subnet_id),
+            "label": payload["label"],
+            "ipv4": payload["ipv4"],
+            "created": "2026-09-02T00:00:00",
+            "updated": "2026-09-02T00:00:00",
+        }
+
+    def create_subnet(self, vpc_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        vpc = self.vpcs[vpc_id]
+        subnet = self.build_subnet(payload)
+        vpc.setdefault("subnets", []).append(subnet)
+        self.persist()
+        return clone(subnet)
+
+    def update_subnet(self, vpc_id: int, subnet_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        subnet = self.get_subnet(vpc_id, subnet_id)
+        subnet.update(updates)
+        subnet["updated"] = "2026-09-02T00:00:00"
+        self.persist()
+        return clone(subnet)
+
+    def get_subnet(self, vpc_id: int, subnet_id: int) -> dict[str, Any]:
+        for subnet in self.vpcs[vpc_id].get("subnets", []):
+            if subnet["id"] == subnet_id:
+                return subnet
+        raise KeyError(subnet_id)
+
+    def delete_subnet(self, vpc_id: int, subnet_id: int) -> None:
+        vpc = self.vpcs[vpc_id]
+        vpc["subnets"] = [subnet for subnet in vpc.get("subnets", []) if subnet["id"] != subnet_id]
+        self.persist()
 
     def create_nodebalancer(self, payload: dict[str, Any]) -> dict[str, Any]:
         nodebalancer_id = next(self.next_nodebalancer_id)
@@ -281,6 +329,29 @@ class ResourceStore:
         nodebalancer.update(updates)
         self.persist()
         return clone(nodebalancer)
+
+    def create_firewall(self, payload: dict[str, Any]) -> dict[str, Any]:
+        firewall_id = next(self.next_firewall_id)
+        firewall = {
+            "id": firewall_id,
+            "label": payload["label"],
+            "status": "enabled",
+            "tags": payload.get("tags", []),
+            "rules": payload.get("rules", {"inbound": [], "outbound": []}),
+            "linodes": payload.get("linodes", []),
+            "created": "2026-09-02T00:00:00",
+            "updated": "2026-09-02T00:00:00",
+        }
+        self.firewalls[firewall_id] = firewall
+        self.persist()
+        return clone(firewall)
+
+    def update_firewall(self, firewall_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        firewall = self.firewalls[firewall_id]
+        firewall.update(updates)
+        firewall["updated"] = "2026-09-02T00:00:00"
+        self.persist()
+        return clone(firewall)
 
     def create_bucket(self, payload: dict[str, Any]) -> dict[str, Any]:
         key = self.bucket_key(payload["cluster"], payload["label"])
@@ -311,6 +382,10 @@ class ResourceStore:
 
     def delete_nodebalancer(self, nodebalancer_id: int) -> None:
         del self.nodebalancers[nodebalancer_id]
+        self.persist()
+
+    def delete_firewall(self, firewall_id: int) -> None:
+        del self.firewalls[firewall_id]
         self.persist()
 
     def delete_bucket(self, key: str) -> None:

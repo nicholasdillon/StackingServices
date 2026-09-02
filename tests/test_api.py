@@ -121,6 +121,74 @@ def test_vpc_and_bucket_creation() -> None:
     assert bucket.json()["hostname"] == "artifacts.us-east-1.linodeobjects.com"
 
 
+def test_vpc_subnet_lifecycle() -> None:
+    vpc = client.post(
+        "/v4/vpcs",
+        headers=AUTH,
+        json={"label": "network-a", "region": "us-east"},
+    ).json()
+
+    subnet = client.post(
+        f"/v4/vpcs/{vpc['id']}/subnets",
+        headers=AUTH,
+        json={"label": "private-a", "ipv4": "10.10.0.0/24"},
+    )
+    assert subnet.status_code == 200
+    subnet_id = subnet.json()["id"]
+
+    updated = client.put(
+        f"/v4/vpcs/{vpc['id']}/subnets/{subnet_id}",
+        headers=AUTH,
+        json={"label": "private-b", "ipv4": "10.10.1.0/24"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["label"] == "private-b"
+
+    listed = client.get(f"/v4/vpcs/{vpc['id']}/subnets", headers=AUTH)
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+
+
+def test_firewall_lifecycle() -> None:
+    instance = client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "fw-node",
+            "region": "us-east",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+        },
+    ).json()
+
+    firewall = client.post(
+        "/v4/networking/firewalls",
+        headers=AUTH,
+        json={
+            "label": "edge-fw",
+            "linodes": [instance["id"]],
+            "rules": {
+                "inbound": [{"action": "ACCEPT", "ports": "80", "protocol": "TCP", "addresses": {"ipv4": ["0.0.0.0/0"]}}],
+                "outbound": [],
+            },
+        },
+    )
+    assert firewall.status_code == 200
+    firewall_id = firewall.json()["id"]
+
+    fetched = client.get(f"/v4/networking/firewalls/{firewall_id}", headers=AUTH)
+    assert fetched.status_code == 200
+    assert fetched.json()["linodes"] == [instance["id"]]
+
+    updated = client.put(
+        f"/v4/networking/firewalls/{firewall_id}",
+        headers=AUTH,
+        json={"tags": ["public-edge"]},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["tags"] == ["public-edge"]
+
+
 def test_filter_and_ordering() -> None:
     client.post(
         "/v4/linode/instances",
