@@ -13,6 +13,9 @@ It is intentionally narrower than MiniStack's AWS coverage. This MVP focuses on 
 - `linode/instances/{id}/configs`
 - `domains`
 - `domains/{id}/records`
+- `databases/engines`
+- `databases/types`
+- `databases/instances`
 - `object-storage/buckets`
 - catalog endpoints such as `regions`, `types`, and `images`
 
@@ -34,6 +37,7 @@ Optional persistence is available through `MININODE_STATE_PATH`.
 - Instance disk and config resources
 - Account event history for control-plane operations
 - Domain and DNS record resources
+- Managed database resources with credentials and reset operations
 
 ## Quick Start
 
@@ -177,6 +181,27 @@ curl -X POST http://127.0.0.1:8000/v4/domains/6000/records \
   -H "Authorization: Bearer $LINODE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"type":"A","name":"app","target":"192.0.2.10"}'
+```
+
+Create a managed database:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/databases/instances \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label":"app-db",
+    "engine":"postgresql/16",
+    "type":"g6-standard-1",
+    "region":"us-east"
+  }'
+```
+
+Reset database credentials:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/databases/instances/8000/credentials/reset \
+  -H "Authorization: Bearer $LINODE_TOKEN"
 ```
 
 Add a subnet to an existing VPC:

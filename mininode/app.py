@@ -220,6 +220,23 @@ class DomainRecordUpdate(BaseModel):
     tag: str | None = None
 
 
+class DatabaseCreate(BaseModel):
+    label: str = Field(min_length=1)
+    engine: str
+    type: str
+    region: str
+    allow_list: list[str] = Field(default_factory=list)
+    cluster_size: int = Field(default=1, ge=1)
+    username: str | None = None
+    password: str | None = None
+
+
+class DatabaseUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    allow_list: list[str] | None = None
+    cluster_size: int | None = Field(default=None, ge=1)
+
+
 def parse_filter(filter_value: str | None) -> dict[str, Any]:
     if not filter_value:
         return {}
@@ -352,6 +369,22 @@ def get_domain_record_or_404(domain_id: int, record_id: int) -> dict[str, Any]:
     return record
 
 
+def get_database_or_404(database_id: int) -> dict[str, Any]:
+    database = store.databases.get(database_id)
+    if not database:
+        error_response("Database not found.", code=status.HTTP_404_NOT_FOUND)
+    return database
+
+
+def validate_database_create(payload: DatabaseCreate) -> None:
+    if not store.region_exists(payload.region):
+        error_response("Invalid region.", field="region")
+    if not store.database_engine_exists(payload.engine):
+        error_response("Invalid database engine.", field="engine")
+    if not store.database_type_exists(payload.type):
+        error_response("Invalid database type.", field="type")
+
+
 def get_subnet_or_404(vpc_id: int, subnet_id: int) -> dict[str, Any]:
     get_vpc_or_404(vpc_id)
     try:
@@ -391,6 +424,7 @@ async def health() -> dict[str, Any]:
             "firewalls": len(store.firewalls),
             "domains": len(store.domains),
             "domain_records": len(store.domain_records),
+            "databases": len(store.databases),
             "events": len(store.events),
             "buckets": len(store.buckets),
         },
@@ -874,6 +908,80 @@ async def delete_domain_record(domain_id: int, record_id: int, _: str = Depends(
     get_domain_record_or_404(domain_id, record_id)
     store.delete_domain_record(record_id)
     return {"deleted": str(record_id)}
+
+
+@app.get("/v4/databases/engines")
+async def list_database_engines(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
+    _: str = Depends(require_bearer_token),
+) -> dict[str, Any]:
+    items = apply_order(apply_filter(store.list_database_engines(), filter_value), order_by, order)
+    return paginate(items, page, page_size)
+
+
+@app.get("/v4/databases/types")
+async def list_database_types(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
+    _: str = Depends(require_bearer_token),
+) -> dict[str, Any]:
+    items = apply_order(apply_filter(store.list_database_types(), filter_value), order_by, order)
+    return paginate(items, page, page_size)
+
+
+@app.get("/v4/databases/instances")
+async def list_databases(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
+    _: str = Depends(require_bearer_token),
+) -> dict[str, Any]:
+    items = apply_order(apply_filter(list(store.databases.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
+
+
+@app.post("/v4/databases/instances", status_code=status.HTTP_200_OK)
+async def create_database(payload: DatabaseCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    validate_database_create(payload)
+    return store.create_database(payload.model_dump(exclude_none=True))
+
+
+@app.get("/v4/databases/instances/{database_id}")
+async def get_database(database_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_database_or_404(database_id)
+
+
+@app.put("/v4/databases/instances/{database_id}")
+async def update_database(database_id: int, payload: DatabaseUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_database_or_404(database_id)
+    return store.update_database(database_id, payload.model_dump(exclude_none=True))
+
+
+@app.get("/v4/databases/instances/{database_id}/credentials")
+async def get_database_credentials(database_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_database_or_404(database_id)["credentials"]
+
+
+@app.post("/v4/databases/instances/{database_id}/credentials/reset", status_code=status.HTTP_200_OK)
+async def reset_database_credentials(database_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_database_or_404(database_id)
+    return store.reset_database_credentials(database_id)
+
+
+@app.delete("/v4/databases/instances/{database_id}", status_code=status.HTTP_200_OK)
+async def delete_database(database_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_database_or_404(database_id)
+    store.delete_database(database_id)
+    return {"deleted": str(database_id)}
 
 
 @app.get("/v4/object-storage/buckets")

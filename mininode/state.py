@@ -75,6 +75,16 @@ OBJECT_STORAGE_CLUSTERS = [
     {"id": "eu-west-1", "region": "eu-west", "domain": "eu-west-1.linodeobjects.com", "status": "available"},
 ]
 
+DATABASE_ENGINES = [
+    {"id": "mysql/8", "engine": "mysql", "version": "8", "platform": "rdbms"},
+    {"id": "postgresql/16", "engine": "postgresql", "version": "16", "platform": "rdbms"},
+]
+
+DATABASE_TYPES = [
+    {"id": "g6-nanode-1", "label": "Nanode 1 GB", "class": "standard", "memory": 1024, "disk": 25600, "vcpus": 1},
+    {"id": "g6-standard-1", "label": "Dedicated 2 GB", "class": "standard", "memory": 2048, "disk": 51200, "vcpus": 1},
+]
+
 
 def paginate(items: list[dict[str, Any]], page: int, page_size: int) -> dict[str, Any]:
     total = len(items)
@@ -105,6 +115,7 @@ class ResourceStore:
     firewalls: dict[int, dict[str, Any]] = field(default_factory=dict)
     domains: dict[int, dict[str, Any]] = field(default_factory=dict)
     domain_records: dict[int, dict[str, Any]] = field(default_factory=dict)
+    databases: dict[int, dict[str, Any]] = field(default_factory=dict)
     events: dict[int, dict[str, Any]] = field(default_factory=dict)
     buckets: dict[str, dict[str, Any]] = field(default_factory=dict)
     next_instance_id: count = field(default_factory=lambda: count(1000))
@@ -117,6 +128,7 @@ class ResourceStore:
     next_firewall_id: count = field(default_factory=lambda: count(5000))
     next_domain_id: count = field(default_factory=lambda: count(6000))
     next_domain_record_id: count = field(default_factory=lambda: count(7000))
+    next_database_id: count = field(default_factory=lambda: count(8000))
     next_event_id: count = field(default_factory=lambda: count(9000))
 
     def reset(self) -> None:
@@ -129,6 +141,7 @@ class ResourceStore:
         self.firewalls.clear()
         self.domains.clear()
         self.domain_records.clear()
+        self.databases.clear()
         self.events.clear()
         self.buckets.clear()
         self.next_instance_id = count(1000)
@@ -141,6 +154,7 @@ class ResourceStore:
         self.next_firewall_id = count(5000)
         self.next_domain_id = count(6000)
         self.next_domain_record_id = count(7000)
+        self.next_database_id = count(8000)
         self.next_event_id = count(9000)
 
     def configure(self, state_path: str | None) -> None:
@@ -160,6 +174,7 @@ class ResourceStore:
         self.firewalls = {int(key): value for key, value in data.get("firewalls", {}).items()}
         self.domains = {int(key): value for key, value in data.get("domains", {}).items()}
         self.domain_records = {int(key): value for key, value in data.get("domain_records", {}).items()}
+        self.databases = {int(key): value for key, value in data.get("databases", {}).items()}
         self.events = {int(key): value for key, value in data.get("events", {}).items()}
         self.buckets = data.get("buckets", {})
         self.next_instance_id = count(data.get("next_instance_id", 1000))
@@ -172,6 +187,7 @@ class ResourceStore:
         self.next_firewall_id = count(data.get("next_firewall_id", 5000))
         self.next_domain_id = count(data.get("next_domain_id", 6000))
         self.next_domain_record_id = count(data.get("next_domain_record_id", 7000))
+        self.next_database_id = count(data.get("next_database_id", 8000))
         self.next_event_id = count(data.get("next_event_id", 9000))
 
     def save(self) -> None:
@@ -191,6 +207,7 @@ class ResourceStore:
                     "firewalls": self.firewalls,
                     "domains": self.domains,
                     "domain_records": self.domain_records,
+                    "databases": self.databases,
                     "events": self.events,
                     "buckets": self.buckets,
                     "next_instance_id": self.next_counter_value("next_instance_id"),
@@ -203,6 +220,7 @@ class ResourceStore:
                     "next_firewall_id": self.next_counter_value("next_firewall_id"),
                     "next_domain_id": self.next_counter_value("next_domain_id"),
                     "next_domain_record_id": self.next_counter_value("next_domain_record_id"),
+                    "next_database_id": self.next_counter_value("next_database_id"),
                     "next_event_id": self.next_counter_value("next_event_id"),
                 },
                 indent=2,
@@ -234,6 +252,12 @@ class ResourceStore:
     def list_events(self) -> list[dict[str, Any]]:
         return clone(sorted(self.events.values(), key=lambda item: item["id"], reverse=True))
 
+    def list_database_engines(self) -> list[dict[str, Any]]:
+        return clone(DATABASE_ENGINES)
+
+    def list_database_types(self) -> list[dict[str, Any]]:
+        return clone(DATABASE_TYPES)
+
     def region_exists(self, region: str) -> bool:
         return any(item["id"] == region for item in REGIONS)
 
@@ -245,6 +269,12 @@ class ResourceStore:
 
     def cluster_exists(self, cluster: str) -> bool:
         return any(item["id"] == cluster for item in OBJECT_STORAGE_CLUSTERS)
+
+    def database_engine_exists(self, engine: str) -> bool:
+        return any(item["id"] == engine for item in DATABASE_ENGINES)
+
+    def database_type_exists(self, database_type: str) -> bool:
+        return any(item["id"] == database_type for item in DATABASE_TYPES)
 
     def create_instance(self, payload: dict[str, Any]) -> dict[str, Any]:
         instance_id = next(self.next_instance_id)
@@ -591,6 +621,56 @@ class ResourceStore:
     def record_event(self, action: str, entity: dict[str, Any] | None, secondary_entity: dict[str, Any] | None = None) -> None:
         self.create_event({"action": action, "entity": entity, "secondary_entity": secondary_entity})
 
+    def create_database(self, payload: dict[str, Any]) -> dict[str, Any]:
+        database_id = next(self.next_database_id)
+        database = {
+            "id": database_id,
+            "label": payload["label"],
+            "engine": payload["engine"],
+            "type": payload["type"],
+            "region": payload["region"],
+            "status": "active",
+            "allow_list": payload.get("allow_list", []),
+            "cluster_size": payload.get("cluster_size", 1),
+            "encrypted": True,
+            "hosts": {
+                "primary": f"db-{database_id}.mininode.local",
+                "standby": None,
+            },
+            "port": 3306 if payload["engine"].startswith("mysql") else 5432,
+            "ssl_connection": True,
+            "updates": {"day_of_week": 0, "duration": 1, "frequency": "weekly", "hour_of_day": 3, "week_of_month": None},
+            "created": NOW,
+            "updated": NOW,
+            "credentials": {
+                "username": payload.get("username", "linodeadmin"),
+                "password": payload.get("password", f"mininode-{database_id}"),
+            },
+        }
+        self.databases[database_id] = database
+        self.record_event("database_create", self.entity_ref("database", database_id, database["label"], f"/v4/databases/instances/{database_id}"))
+        self.persist()
+        return clone(database)
+
+    def update_database(self, database_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        database = self.databases[database_id]
+        database.update(updates)
+        database["updated"] = NOW
+        self.record_event("database_update", self.entity_ref("database", database_id, database["label"], f"/v4/databases/instances/{database_id}"))
+        self.persist()
+        return clone(database)
+
+    def reset_database_credentials(self, database_id: int) -> dict[str, Any]:
+        database = self.databases[database_id]
+        database["credentials"] = {
+            "username": database["credentials"]["username"],
+            "password": f"mininode-{database_id}-reset",
+        }
+        database["updated"] = NOW
+        self.record_event("database_credentials_reset", self.entity_ref("database", database_id, database["label"], f"/v4/databases/instances/{database_id}"))
+        self.persist()
+        return clone(database["credentials"])
+
     @staticmethod
     def entity_ref(resource_type: str, resource_id: int | str, label: str, url: str) -> dict[str, Any]:
         return {"type": resource_type, "id": resource_id, "label": label, "url": url}
@@ -650,6 +730,12 @@ class ResourceStore:
         record = self.domain_records[record_id]
         del self.domain_records[record_id]
         self.record_event("domain_record_delete", self.entity_ref("domain_record", record_id, record["name"] or record["type"], f"/v4/domains/{record['domain_id']}/records/{record_id}"))
+        self.persist()
+
+    def delete_database(self, database_id: int) -> None:
+        database = self.databases[database_id]
+        del self.databases[database_id]
+        self.record_event("database_delete", self.entity_ref("database", database_id, database["label"], f"/v4/databases/instances/{database_id}"))
         self.persist()
 
     def delete_bucket(self, key: str) -> None:

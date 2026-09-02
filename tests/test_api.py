@@ -356,6 +356,51 @@ def test_domain_and_record_lifecycle() -> None:
     assert events.json()["data"][0]["secondary_entity"]["type"] == "domain"
 
 
+def test_database_lifecycle() -> None:
+    created = client.post(
+        "/v4/databases/instances",
+        headers=AUTH,
+        json={
+            "label": "app-db",
+            "engine": "postgresql/16",
+            "type": "g6-standard-1",
+            "region": "us-east",
+            "allow_list": ["10.0.0.0/24"],
+        },
+    )
+    assert created.status_code == 200
+    database = created.json()
+    assert database["port"] == 5432
+
+    fetched = client.get(f"/v4/databases/instances/{database['id']}", headers=AUTH)
+    assert fetched.status_code == 200
+    assert fetched.json()["hosts"]["primary"] == f"db-{database['id']}.mininode.local"
+
+    credentials = client.get(f"/v4/databases/instances/{database['id']}/credentials", headers=AUTH)
+    assert credentials.status_code == 200
+    assert credentials.json()["username"] == "linodeadmin"
+
+    reset = client.post(f"/v4/databases/instances/{database['id']}/credentials/reset", headers=AUTH)
+    assert reset.status_code == 200
+    assert reset.json()["password"] == f"mininode-{database['id']}-reset"
+
+    updated = client.put(
+        f"/v4/databases/instances/{database['id']}",
+        headers=AUTH,
+        json={"cluster_size": 2},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["cluster_size"] == 2
+
+    events = client.get(
+        "/v4/account/events",
+        headers=AUTH,
+        params={"+filter": json.dumps({"action": "database_create"})},
+    )
+    assert events.status_code == 200
+    assert events.json()["results"] == 1
+
+
 def test_store_persistence(tmp_path: Path) -> None:
     state_file = tmp_path / "state.json"
     store.configure(str(state_file))
