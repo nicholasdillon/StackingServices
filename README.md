@@ -17,6 +17,7 @@ It is intentionally narrower than MiniStack's AWS coverage. This MVP focuses on 
 - `databases/types`
 - `databases/instances`
 - `profile/sshkeys`
+- `stackscripts`
 - `object-storage/buckets`
 - catalog endpoints such as `regions`, `types`, and `images`
 
@@ -40,6 +41,7 @@ Optional persistence is available through `MININODE_STATE_PATH`.
 - Domain and DNS record resources
 - Managed database resources with credentials and reset operations
 - Account SSH key resources and instance authorized key validation
+- StackScript resources and instance linkage
 
 ## Quick Start
 
@@ -213,6 +215,19 @@ curl -X POST http://127.0.0.1:8000/v4/profile/sshkeys \
   -H "Authorization: Bearer $LINODE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"label":"laptop","ssh_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey user@example"}'
+```
+
+Create a StackScript:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v4/stackscripts \
+  -H "Authorization: Bearer $LINODE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label":"bootstrap-nginx",
+    "script":"#!/bin/bash\necho hello",
+    "images":["linode/ubuntu24.04"]
+  }'
 ```
 
 Add a subnet to an existing VPC:

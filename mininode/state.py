@@ -117,6 +117,7 @@ class ResourceStore:
     domain_records: dict[int, dict[str, Any]] = field(default_factory=dict)
     databases: dict[int, dict[str, Any]] = field(default_factory=dict)
     ssh_keys: dict[int, dict[str, Any]] = field(default_factory=dict)
+    stackscripts: dict[int, dict[str, Any]] = field(default_factory=dict)
     events: dict[int, dict[str, Any]] = field(default_factory=dict)
     buckets: dict[str, dict[str, Any]] = field(default_factory=dict)
     next_instance_id: count = field(default_factory=lambda: count(1000))
@@ -131,6 +132,7 @@ class ResourceStore:
     next_domain_record_id: count = field(default_factory=lambda: count(7000))
     next_database_id: count = field(default_factory=lambda: count(8000))
     next_ssh_key_id: count = field(default_factory=lambda: count(8500))
+    next_stackscript_id: count = field(default_factory=lambda: count(8750))
     next_event_id: count = field(default_factory=lambda: count(9000))
 
     def reset(self) -> None:
@@ -145,6 +147,7 @@ class ResourceStore:
         self.domain_records.clear()
         self.databases.clear()
         self.ssh_keys.clear()
+        self.stackscripts.clear()
         self.events.clear()
         self.buckets.clear()
         self.next_instance_id = count(1000)
@@ -159,6 +162,7 @@ class ResourceStore:
         self.next_domain_record_id = count(7000)
         self.next_database_id = count(8000)
         self.next_ssh_key_id = count(8500)
+        self.next_stackscript_id = count(8750)
         self.next_event_id = count(9000)
 
     def configure(self, state_path: str | None) -> None:
@@ -180,6 +184,7 @@ class ResourceStore:
         self.domain_records = {int(key): value for key, value in data.get("domain_records", {}).items()}
         self.databases = {int(key): value for key, value in data.get("databases", {}).items()}
         self.ssh_keys = {int(key): value for key, value in data.get("ssh_keys", {}).items()}
+        self.stackscripts = {int(key): value for key, value in data.get("stackscripts", {}).items()}
         self.events = {int(key): value for key, value in data.get("events", {}).items()}
         self.buckets = data.get("buckets", {})
         self.next_instance_id = count(data.get("next_instance_id", 1000))
@@ -194,6 +199,7 @@ class ResourceStore:
         self.next_domain_record_id = count(data.get("next_domain_record_id", 7000))
         self.next_database_id = count(data.get("next_database_id", 8000))
         self.next_ssh_key_id = count(data.get("next_ssh_key_id", 8500))
+        self.next_stackscript_id = count(data.get("next_stackscript_id", 8750))
         self.next_event_id = count(data.get("next_event_id", 9000))
 
     def save(self) -> None:
@@ -215,6 +221,7 @@ class ResourceStore:
                     "domain_records": self.domain_records,
                     "databases": self.databases,
                     "ssh_keys": self.ssh_keys,
+                    "stackscripts": self.stackscripts,
                     "events": self.events,
                     "buckets": self.buckets,
                     "next_instance_id": self.next_counter_value("next_instance_id"),
@@ -229,6 +236,7 @@ class ResourceStore:
                     "next_domain_record_id": self.next_counter_value("next_domain_record_id"),
                     "next_database_id": self.next_counter_value("next_database_id"),
                     "next_ssh_key_id": self.next_counter_value("next_ssh_key_id"),
+                    "next_stackscript_id": self.next_counter_value("next_stackscript_id"),
                     "next_event_id": self.next_counter_value("next_event_id"),
                 },
                 indent=2,
@@ -292,6 +300,8 @@ class ResourceStore:
             "region": payload["region"],
             "type": payload["type"],
             "image": payload.get("image"),
+            "stackscript_id": payload.get("stackscript_id"),
+            "stackscript_data": payload.get("stackscript_data", {}),
             "status": "running",
             "group": payload.get("group", ""),
             "tags": payload.get("tags", []),
@@ -674,6 +684,42 @@ class ResourceStore:
         self.persist()
         return clone(ssh_key)
 
+    def create_stackscript(self, payload: dict[str, Any]) -> dict[str, Any]:
+        stackscript_id = next(self.next_stackscript_id)
+        stackscript = {
+            "id": stackscript_id,
+            "label": payload["label"],
+            "description": payload.get("description", ""),
+            "script": payload["script"],
+            "images": payload.get("images", []),
+            "is_public": payload.get("is_public", False),
+            "rev_note": payload.get("rev_note", "Initial revision"),
+            "deployments_total": 0,
+            "mine": True,
+            "created": NOW,
+            "updated": NOW,
+            "username": "mininode",
+            "user_defined_fields": payload.get("user_defined_fields", []),
+        }
+        self.stackscripts[stackscript_id] = stackscript
+        self.record_event("stackscript_create", self.entity_ref("stackscript", stackscript_id, stackscript["label"], f"/v4/stackscripts/{stackscript_id}"))
+        self.persist()
+        return clone(stackscript)
+
+    def update_stackscript(self, stackscript_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+        stackscript = self.stackscripts[stackscript_id]
+        stackscript.update(updates)
+        stackscript["updated"] = NOW
+        self.record_event("stackscript_update", self.entity_ref("stackscript", stackscript_id, stackscript["label"], f"/v4/stackscripts/{stackscript_id}"))
+        self.persist()
+        return clone(stackscript)
+
+    def register_stackscript_deployment(self, stackscript_id: int) -> None:
+        stackscript = self.stackscripts[stackscript_id]
+        stackscript["deployments_total"] += 1
+        stackscript["updated"] = NOW
+        self.persist()
+
     def update_ssh_key(self, ssh_key_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         ssh_key = self.ssh_keys[ssh_key_id]
         ssh_key.update(updates)
@@ -771,6 +817,12 @@ class ResourceStore:
         ssh_key = self.ssh_keys[ssh_key_id]
         del self.ssh_keys[ssh_key_id]
         self.record_event("sshkey_delete", self.entity_ref("ssh_key", ssh_key_id, ssh_key["label"], f"/v4/profile/sshkeys/{ssh_key_id}"))
+        self.persist()
+
+    def delete_stackscript(self, stackscript_id: int) -> None:
+        stackscript = self.stackscripts[stackscript_id]
+        del self.stackscripts[stackscript_id]
+        self.record_event("stackscript_delete", self.entity_ref("stackscript", stackscript_id, stackscript["label"], f"/v4/stackscripts/{stackscript_id}"))
         self.persist()
 
     def delete_bucket(self, key: str) -> None:

@@ -55,6 +55,8 @@ class InstanceCreate(BaseModel):
     region: str
     type: str
     image: str | None = None
+    stackscript_id: int | None = None
+    stackscript_data: dict[str, Any] = Field(default_factory=dict)
     group: str | None = None
     tags: list[str] = Field(default_factory=list)
     authorized_keys: list[str] = Field(default_factory=list)
@@ -247,6 +249,26 @@ class SshKeyUpdate(BaseModel):
     label: str | None = Field(default=None, min_length=1)
 
 
+class StackScriptCreate(BaseModel):
+    label: str = Field(min_length=1)
+    script: str = Field(min_length=1)
+    description: str | None = None
+    images: list[str] = Field(default_factory=list)
+    is_public: bool = False
+    rev_note: str | None = None
+    user_defined_fields: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class StackScriptUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1)
+    script: str | None = None
+    description: str | None = None
+    images: list[str] | None = None
+    is_public: bool | None = None
+    rev_note: str | None = None
+    user_defined_fields: list[dict[str, Any]] | None = None
+
+
 def parse_filter(filter_value: str | None) -> dict[str, Any]:
     if not filter_value:
         return {}
@@ -393,6 +415,13 @@ def get_ssh_key_or_404(ssh_key_id: int) -> dict[str, Any]:
     return ssh_key
 
 
+def get_stackscript_or_404(stackscript_id: int) -> dict[str, Any]:
+    stackscript = store.stackscripts.get(stackscript_id)
+    if not stackscript:
+        error_response("StackScript not found.", code=status.HTTP_404_NOT_FOUND)
+    return stackscript
+
+
 def validate_database_create(payload: DatabaseCreate) -> None:
     if not store.region_exists(payload.region):
         error_response("Invalid region.", field="region")
@@ -407,6 +436,11 @@ def validate_instance_keys(authorized_keys: list[str]) -> None:
     for key in authorized_keys:
         if key not in known_keys:
             error_response("SSH key not found in profile.", field="authorized_keys", code=status.HTTP_404_NOT_FOUND)
+
+
+def validate_instance_stackscript(stackscript_id: int | None) -> None:
+    if stackscript_id is not None and stackscript_id not in store.stackscripts:
+        error_response("StackScript not found.", field="stackscript_id", code=status.HTTP_404_NOT_FOUND)
 
 
 def get_subnet_or_404(vpc_id: int, subnet_id: int) -> dict[str, Any]:
@@ -450,6 +484,7 @@ async def health() -> dict[str, Any]:
             "domain_records": len(store.domain_records),
             "databases": len(store.databases),
             "ssh_keys": len(store.ssh_keys),
+            "stackscripts": len(store.stackscripts),
             "events": len(store.events),
             "buckets": len(store.buckets),
         },
@@ -570,7 +605,11 @@ async def list_instances(
 async def create_instance(payload: InstanceCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
     validate_instance_create(payload)
     validate_instance_keys(payload.authorized_keys)
-    return store.create_instance(payload.model_dump())
+    validate_instance_stackscript(payload.stackscript_id)
+    instance = store.create_instance(payload.model_dump())
+    if payload.stackscript_id is not None:
+        store.register_stackscript_deployment(payload.stackscript_id)
+    return instance
 
 
 @app.get("/v4/linode/instances/{instance_id}")
@@ -1044,6 +1083,42 @@ async def delete_ssh_key(ssh_key_id: int, _: str = Depends(require_bearer_token)
     get_ssh_key_or_404(ssh_key_id)
     store.delete_ssh_key(ssh_key_id)
     return {"deleted": str(ssh_key_id)}
+
+
+@app.get("/v4/stackscripts")
+async def list_stackscripts(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    filter_value: str | None = Query(default=None, alias="+filter"),
+    order_by: str | None = Query(default=None, alias="+order_by"),
+    order: str = Query(default="asc", alias="+order"),
+    _: str = Depends(require_bearer_token),
+) -> dict[str, Any]:
+    items = apply_order(apply_filter(list(store.stackscripts.values()), filter_value), order_by, order)
+    return paginate(items, page, page_size)
+
+
+@app.post("/v4/stackscripts", status_code=status.HTTP_200_OK)
+async def create_stackscript(payload: StackScriptCreate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return store.create_stackscript(payload.model_dump(exclude_none=True))
+
+
+@app.get("/v4/stackscripts/{stackscript_id}")
+async def get_stackscript(stackscript_id: int, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    return get_stackscript_or_404(stackscript_id)
+
+
+@app.put("/v4/stackscripts/{stackscript_id}")
+async def update_stackscript(stackscript_id: int, payload: StackScriptUpdate, _: str = Depends(require_bearer_token)) -> dict[str, Any]:
+    get_stackscript_or_404(stackscript_id)
+    return store.update_stackscript(stackscript_id, payload.model_dump(exclude_none=True))
+
+
+@app.delete("/v4/stackscripts/{stackscript_id}", status_code=status.HTTP_200_OK)
+async def delete_stackscript(stackscript_id: int, _: str = Depends(require_bearer_token)) -> dict[str, str]:
+    get_stackscript_or_404(stackscript_id)
+    store.delete_stackscript(stackscript_id)
+    return {"deleted": str(stackscript_id)}
 
 
 @app.get("/v4/object-storage/buckets")

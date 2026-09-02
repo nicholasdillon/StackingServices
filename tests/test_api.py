@@ -450,6 +450,62 @@ def test_ssh_keys_and_instance_authorized_keys() -> None:
     assert missing.status_code == 404
 
 
+def test_stackscript_lifecycle_and_instance_linkage() -> None:
+    stackscript = client.post(
+        "/v4/stackscripts",
+        headers=AUTH,
+        json={
+            "label": "bootstrap-nginx",
+            "script": "#!/bin/bash\necho hello",
+            "images": ["linode/ubuntu24.04"],
+            "user_defined_fields": [{"name": "hostname", "label": "Hostname"}],
+        },
+    )
+    assert stackscript.status_code == 200
+    stackscript_id = stackscript.json()["id"]
+
+    updated = client.put(
+        f"/v4/stackscripts/{stackscript_id}",
+        headers=AUTH,
+        json={"description": "Install nginx and bootstrap app"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["description"] == "Install nginx and bootstrap app"
+
+    instance = client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "scripted-node",
+            "region": "us-east",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+            "stackscript_id": stackscript_id,
+            "stackscript_data": {"hostname": "web-1"},
+        },
+    )
+    assert instance.status_code == 200
+    assert instance.json()["stackscript_id"] == stackscript_id
+    assert instance.json()["stackscript_data"] == {"hostname": "web-1"}
+
+    fetched = client.get(f"/v4/stackscripts/{stackscript_id}", headers=AUTH)
+    assert fetched.status_code == 200
+    assert fetched.json()["deployments_total"] == 1
+
+    missing = client.post(
+        "/v4/linode/instances",
+        headers=AUTH,
+        json={
+            "label": "bad-scripted-node",
+            "region": "us-east",
+            "type": "g6-standard-1",
+            "image": "linode/ubuntu24.04",
+            "stackscript_id": 999999,
+        },
+    )
+    assert missing.status_code == 404
+
+
 def test_store_persistence(tmp_path: Path) -> None:
     state_file = tmp_path / "state.json"
     store.configure(str(state_file))
